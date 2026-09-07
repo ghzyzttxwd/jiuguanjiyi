@@ -1,9 +1,16 @@
 import { collectHotAnchorText } from './smart_host_core.js';
 import { buildRecallContext, DEFAULT_RECALL_SETTINGS } from './recall_core.js';
+import {
+  analyzeRecallDelivery,
+  detectMacroPlacement,
+  detectPromptKeyCollision,
+  summarizeDeliveryDecision,
+} from './recall_delivery_core.js';
 
-const VERSION = '0.1.0-rc1';
+const VERSION = '0.2.0-rc2';
 const PROMPT_KEY = 'vab_cold_recall';
-const SETTINGS_KEY = 'vab.recall.safe.settings.v1';
+const PROMPT_SIGNATURE = '<variable_cold_archive_recall>';
+const SETTINGS_KEY = 'vab.recall.safe.settings.v2';
 const UI_INTERVAL_MS = 4000;
 
 let mounted = false;
@@ -11,8 +18,11 @@ let uiTimer = null;
 let enabled = false;
 let statusText = '未启用';
 let previewText = '';
+let conflictText = '尚未检查';
 let bindings = [];
 let promptEnums = null;
+let lastOwnedPrompt = '';
+let lastDecision = null;
 
 const defaults = {
   enabled: false,
@@ -74,12 +84,50 @@ function recallQuery(statData) {
   return [recentContextText(8), collectHotAnchorText(statData)].filter(Boolean).join('\n');
 }
 
-function memoryEnhancementActive() {
+function memoryEnhancementActive(s = state()) {
   try {
-    return !!(window.stMemoryEnhancement || window.parent?.stMemoryEnhancement);
-  } catch {
-    return false;
+    if (window.externalDataAdapter?.processJsonData || window.parent?.externalDataAdapter?.processJsonData) return true;
+    if (window.stMemoryEnhancement || window.parent?.stMemoryEnhancement) return true;
+  } catch {}
+  const archives = s?.archiveCache || [];
+  return !!(s?.settings?.memoryMirrorEnabled && archives.some(r => r?.mirroredToMemory));
+}
+
+function promptPlacementSources() {
+  const c = ctx();
+  if (!c) return [];
+  let cardFields = null;
+  try { cardFields = c.getCharacterCardFields?.() || null; } catch {}
+  return [
+    { name: 'characterCard', value: cardFields },
+    { name: 'extensionPrompts', value: c.extensionPrompts },
+    { name: 'chatCompletionSettings', value: c.chatCompletionSettings },
+    { name: 'textCompletionSettings', value: c.textCompletionSettings },
+    { name: 'powerUserSettings', value: c.powerUserSettings },
+    { name: 'chatMetadata', value: c.chatMetadata },
+  ];
+}
+
+function legacyMacroInfo(s = state()) {
+  const vab = getVab();
+  const macroEnabled = !!s?.settings?.macroEnabled;
+  let text = '';
+  if (macroEnabled) {
+    try { text = String(vab?.buildMacroContext?.() || ''); } catch {}
   }
+  return { enabled: macroEnabled, text };
+}
+
+function currentPromptValue() {
+  const entry = ctx()?.extensionPrompts?.[PROMPT_KEY];
+  if (!entry) return '';
+  if (typeof entry === 'string') return entry;
+  return String(entry.value || '');
+}
+
+function recordIdentity(item) {
+  const record = item?.record || item;
+  return String(record?.pointer || `${record?.sourcePath || ''}/${record?.childKey || ''}`);
 }
 
 function buildCurrentRecall() {
@@ -87,16 +135,68 @@ function buildCurrentRecall() {
   const statData = s?.latestMvu?.statData || null;
   const archives = s?.archiveCache || [];
   const queryText = recallQuery(statData);
-  const settings = {
+  const memoryActive = memoryEnhancementActive(s);
+  const sharedSettings = {
     ...DEFAULT_RECALL_SETTINGS,
     maxRecords: cfg.maxRecords,
     maxChars: cfg.maxChars,
     maxRecordChars: cfg.maxRecordChars,
     minScore: cfg.minScore,
     includePinnedWithoutMatch: cfg.includePinnedWithoutMatch,
-    skipMirrored: cfg.skipMirroredWhenMemoryActive && memoryEnhancementActive(),
   };
-  return buildRecallContext({ archives, statData, queryText, settings });
+
+  let unfiltered = null;
+  let skippedMirroredCount = 0;
+  const shouldSkipMirrored = cfg.skipMirroredWhenMemoryActive && memoryActive;
+  if (shouldSkipMirrored) {
+    unfiltered = buildRecallContext({
+      archives,
+      statData,
+      queryText,
+      settings: { ...sharedSettings, skipMirrored: false },
+    });
+  }
+
+  const result = buildRecallContext({
+    archives,
+    statData,
+    queryText,
+    settings: { ...sharedSettings, skipMirrored: shouldSkipMirrored },
+  });
+
+  if (unfiltered) {
+    const kept = new Set(result.ranked.map(recordIdentity));
+    skippedMirroredCount = unfiltered.ranked.filter(item => item?.record?.mirroredToMemory && !kept.has(recordIdentity(item))).length;
+  }
+
+  const macroPlacement = detectMacroPlacement(promptPlacementSources());
+  const legacy = legacyMacroInfo(s);
+  const promptOwnership = detectPromptKeyCollision({
+    existingValue: currentPromptValue(),
+    lastOwnedValue: lastOwnedPrompt,
+    signature: PROMPT_SIGNATURE,
+  });
+  const decision = analyzeRecallDelivery({
+    ranked: result.ranked,
+    legacyMacroEnabled: legacy.enabled,
+    legacyMacroText: legacy.text,
+    macroPlacement,
+    memoryActive,
+    skippedMirroredCount,
+    promptCollision: promptOwnership.collision,
+  });
+
+  return {
+    ...result,
+    queryText,
+    memoryActive,
+    skippedMirroredCount,
+    macroPlacement,
+    legacyMacroEnabled: legacy.enabled,
+    legacyMacroText: legacy.text,
+    promptOwnership,
+    decision,
+  };
 }
 
 async function resolvePromptEnums() {
@@ -115,26 +215,48 @@ async function resolvePromptEnums() {
   }
 }
 
-async function clearInjection() {
+async function clearInjection({ forceOwned = false } = {}) {
   const c = ctx();
-  if (!c?.setExtensionPrompt) return;
+  if (!c?.setExtensionPrompt) return false;
+  const existing = currentPromptValue();
+  const ownership = detectPromptKeyCollision({
+    existingValue: existing,
+    lastOwnedValue: lastOwnedPrompt,
+    signature: PROMPT_SIGNATURE,
+  });
+  if (ownership.collision && !forceOwned) {
+    console.warn('[VAB Recall Safe] refuse to clear foreign prompt key content');
+    return false;
+  }
   try {
     const enums = await resolvePromptEnums();
     c.setExtensionPrompt(PROMPT_KEY, '', enums.position, cfg.depth, false, enums.role);
+    lastOwnedPrompt = '';
+    return true;
   } catch (error) {
     console.warn('[VAB Recall Safe] clear injection failed', error);
+    return false;
   }
+}
+
+function updateDecisionPreview(result) {
+  lastDecision = result?.decision || null;
+  conflictText = result?.decision
+    ? summarizeDeliveryDecision(result.decision)
+    : '尚未形成投递决策';
 }
 
 async function refreshInjection({ reason = 'event', forcePreview = false } = {}) {
   const result = buildCurrentRecall();
   previewText = result.text;
+  updateDecisionPreview(result);
 
   if (!enabled) {
     if (forcePreview) {
-      statusText = result.ranked.length
-        ? `只读预览：命中 ${result.ranked.length} 条冷档案 / ${result.chars}字符 · 未注入模型`
-        : '只读预览：当前没有相关冷档案 · 未注入模型';
+      const base = result.ranked.length
+        ? `只读预览：命中 ${result.ranked.length} 条冷档案 / ${result.chars}字符`
+        : '只读预览：当前没有相关冷档案';
+      statusText = `${base} · 未注入模型 · ${conflictText}`;
     }
     updateUi();
     return result;
@@ -149,11 +271,29 @@ async function refreshInjection({ reason = 'event', forcePreview = false } = {})
   }
 
   try {
+    if (result.decision.mode === 'blocked-collision') {
+      enabled = false;
+      cfg.enabled = false;
+      saveSettings();
+      statusText = `自动召回已关闭：${conflictText}`;
+      updateUi();
+      return result;
+    }
+
+    if (result.decision.mode === 'legacy-macro') {
+      await clearInjection();
+      statusText = `协调模式：本轮不新建Prompt，沿用旧宏通道 · ${reason} · ${conflictText}`;
+      updateUi();
+      return result;
+    }
+
     const enums = await resolvePromptEnums();
-    c.setExtensionPrompt(PROMPT_KEY, result.text || '', enums.position, cfg.depth, false, enums.role);
+    const nextText = result.text || '';
+    c.setExtensionPrompt(PROMPT_KEY, nextText, enums.position, cfg.depth, false, enums.role);
+    lastOwnedPrompt = nextText;
     statusText = result.ranked.length
-      ? `已准备召回 ${result.ranked.length} 条 / ${result.chars}字符 · ${reason}`
-      : `本轮无相关冷档案，已清空召回Prompt · ${reason}`;
+      ? `已准备召回 ${result.ranked.length} 条 / ${result.chars}字符 · ${reason} · ${conflictText}`
+      : `本轮无相关冷档案，已清空召回Prompt · ${reason} · ${conflictText}`;
   } catch (error) {
     enabled = false;
     cfg.enabled = false;
@@ -171,17 +311,25 @@ async function setEnabled(value) {
     cfg.enabled = false;
     saveSettings();
     await clearInjection();
-    statusText = '未启用 · 已清空本插件Prompt';
+    statusText = '未启用 · 已清空本插件拥有的Prompt';
     updateUi();
     return;
   }
 
   try {
     await resolvePromptEnums();
+    const initial = buildCurrentRecall();
+    updateDecisionPreview(initial);
+    if (initial.decision.mode === 'blocked-collision') {
+      enabled = false;
+      statusText = `无法开启：${conflictText}`;
+      updateUi();
+      return;
+    }
     enabled = true;
-    cfg.enabled = false; // never persist experimental enable across reloads
+    cfg.enabled = false;
     saveSettings();
-    await refreshInjection({ reason: '手动开启' });
+    await refreshInjection({ reason: '手动开启协调器' });
   } catch (error) {
     enabled = false;
     statusText = `无法开启：${error?.message || error}`;
@@ -208,7 +356,9 @@ function hookEvents() {
   const clearOnChat = () => {
     clearInjection().finally(() => {
       previewText = '';
+      conflictText = '聊天已切换，等待重新检查';
       if (enabled) setTimeout(() => refreshInjection({ reason: '聊天切换' }), 250);
+      else updateUi();
     });
   };
   const finalBeforePrompt = () => {
@@ -230,12 +380,6 @@ function unhookEvents() {
   bindings = [];
 }
 
-function escapeHtml(value) {
-  return String(value ?? '').replace(/[&<>"']/g, c => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-  }[c]));
-}
-
 function ensureUi() {
   const host = document.querySelector('#vab-smart-host-safe');
   if (!host) return;
@@ -250,15 +394,16 @@ function ensureUi() {
   box.open = false;
   box.innerHTML = `
     <summary>🗃️ 冷档案自动召回候选 ${VERSION}</summary>
-    <div class="vab-note">这是读穿层：冷档案仍留在 IndexedDB，需要时只把相关内容送进本轮Prompt，不恢复成MVU热变量。默认关闭实际注入；先用只读预览。重启后实际注入永远恢复关闭。</div>
-    <label class="checkbox_label"><input type="checkbox" data-vab-recall-enabled> 实际Prompt自动召回（实验）</label>
+    <div class="vab-note">RC2协调模式：冷档案继续留在 IndexedDB，只读召回相关片段。会自动检测现有 {{varArchiveContext}}、记忆增强镜像和同名Prompt Key；能让路就自动让路，不能安全判定就阻止注入。默认仍关闭实际注入，重启后也不会自动开启。</div>
+    <label class="checkbox_label"><input type="checkbox" data-vab-recall-enabled> 实际Prompt自动召回协调器（实验）</label>
     <label class="checkbox_label"><input type="checkbox" data-vab-recall-pinned> 无关键词时允许置顶档案作为背景召回</label>
     <label class="checkbox_label"><input type="checkbox" data-vab-recall-skip-mirror> 检测到记忆增强时跳过已镜像档案</label>
     <div class="vab-actions">
-      <button class="menu_button" data-vab-recall-preview>只读召回预览</button>
+      <button class="menu_button" data-vab-recall-preview>只读召回+冲突预览</button>
       <button class="menu_button" data-vab-recall-clear>清空本插件Prompt</button>
     </div>
     <div class="vab-note" data-vab-recall-status></div>
+    <div class="vab-note"><b>通道判定：</b><span data-vab-recall-conflict>尚未检查</span></div>
     <details>
       <summary>召回预算</summary>
       <label>最多档案 <input class="vab-num" type="number" min="1" max="20" data-vab-recall-records></label>
@@ -282,8 +427,10 @@ function ensureUi() {
   });
   box.querySelector('[data-vab-recall-preview]')?.addEventListener('click', () => refreshInjection({ forcePreview: true, reason: '只读预览' }));
   box.querySelector('[data-vab-recall-clear]')?.addEventListener('click', async () => {
-    await clearInjection();
-    statusText = enabled ? '已手动清空；下一次消息/生成前会按需重建' : '已清空本插件Prompt';
+    const cleared = await clearInjection();
+    statusText = cleared
+      ? (enabled ? '已清空本插件Prompt；下一次消息/生成前会按协调策略重建' : '已清空本插件Prompt')
+      : '未清空：同名Prompt Key 当前不是本插件拥有，已保护外部内容';
     updateUi();
   });
 
@@ -320,6 +467,8 @@ function updateUi() {
   value('[data-vab-recall-record-chars]', cfg.maxRecordChars);
   const status = box.querySelector('[data-vab-recall-status]');
   if (status) status.textContent = `${enabled ? '●' : '○'} ${statusText}`;
+  const conflict = box.querySelector('[data-vab-recall-conflict]');
+  if (conflict) conflict.textContent = conflictText;
   const preview = box.querySelector('[data-vab-recall-preview-text]');
   if (preview) preview.textContent = previewText || '（当前没有需要召回的冷档案）';
 }
@@ -331,6 +480,7 @@ export function mountRecallSafe() {
   cfg.enabled = false;
   saveSettings();
   statusText = '未启用 · 实际Prompt注入保持关闭';
+  conflictText = '等待只读检查';
   hookEvents();
   ensureUi();
   uiTimer = setInterval(ensureUi, UI_INTERVAL_MS);
@@ -346,6 +496,8 @@ export async function unmountRecallSafe() {
   await clearInjection();
   document.querySelector('#vab-recall-safe')?.remove();
   previewText = '';
+  conflictText = '尚未检查';
+  lastDecision = null;
   mounted = false;
 }
 
@@ -354,6 +506,7 @@ export const RecallSafeDiagnostics = {
   PROMPT_KEY,
   getSettings: () => clone(cfg),
   getStatus: () => statusText,
+  getDecision: () => clone(lastDecision),
   preview: () => buildCurrentRecall(),
   isEnabled: () => enabled,
 };
