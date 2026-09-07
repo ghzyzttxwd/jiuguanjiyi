@@ -8,9 +8,9 @@ import {
   updateActivity,
 } from './smart_host_core.js';
 
-const VERSION = '0.2.0-rc2';
-const SETTINGS_KEY = 'vab.smartHost.safe.settings.v3';
-const ACTIVITY_KEY = 'vab.smartHost.safe.activity.v3';
+const VERSION = '0.2.0-rc3';
+const SETTINGS_KEY = 'vab.smartHost.safe.settings.v4';
+const ACTIVITY_KEY = 'vab.smartHost.safe.activity.v4';
 const UI_INTERVAL_MS = 2500;
 const CYCLE_INTERVAL_MS = 15000;
 const FUTURE_SIM_MESSAGES = 60;
@@ -62,13 +62,61 @@ function ctx() {
   }
 }
 
-function recentUserText(count = cfg.recentMentionMessages) {
+function recentContextText(count = cfg.recentMentionMessages) {
   const chat = ctx()?.chat || [];
   return chat
-    .filter(m => m && m.is_user)
+    .filter(m => m && typeof m.mes === 'string')
     .slice(-Math.max(1, Number(count) || 1))
     .map(m => String(m.mes || ''))
     .join('\n');
+}
+
+function buildHotAnchorText(statData) {
+  if (!statData || typeof statData !== 'object' || Array.isArray(statData)) return '';
+  const hotRootPattern = /(玩家|user|当前|current|任务|task|队伍|小队|同行|同伴|team|party|状态|status)/i;
+  const parts = [];
+  let chars = 0;
+  const cap = 8000;
+
+  function push(value) {
+    if (chars >= cap) return;
+    const text = String(value ?? '').trim();
+    if (!text) return;
+    const clipped = text.slice(0, 300);
+    parts.push(clipped);
+    chars += clipped.length + 1;
+  }
+
+  function walk(value, depth) {
+    if (chars >= cap || depth > 3 || value == null) return;
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+      push(value);
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value.slice(0, 20)) walk(item, depth + 1);
+      return;
+    }
+    if (typeof value !== 'object') return;
+    for (const [key, child] of Object.entries(value)) {
+      push(key);
+      walk(child, depth + 1);
+      if (chars >= cap) break;
+    }
+  }
+
+  for (const [key, value] of Object.entries(statData)) {
+    if (!hotRootPattern.test(key)) continue;
+    push(key);
+    walk(value, 0);
+    if (chars >= cap) break;
+  }
+
+  return parts.join('\n').slice(0, cap);
+}
+
+function protectionText(statData) {
+  return [recentContextText(), buildHotAnchorText(statData)].filter(Boolean).join('\n');
 }
 
 function messageCount() {
@@ -85,6 +133,10 @@ function getVab() {
 
 function getState() {
   return getVab()?.getState?.() || null;
+}
+
+function legacyAutoEnabled(state) {
+  return !!state?.settings?.autoArchiveGlobal;
 }
 
 function refreshActivity(state) {
@@ -110,17 +162,19 @@ function buildPreview(state, options = {}) {
   const settings = options.settings || cfg;
   const containers = options.containers || discoverContainers(stat, settings);
   const root = options.activityRoot || scopeBucket(scopeKey);
-  const text = options.recentText ?? recentUserText(settings.recentMentionMessages);
+  const text = options.recentText ?? protectionText(stat);
   const msgCount = options.messageCount ?? messageCount();
   const allowRestore = options.allowRestore ?? true;
 
   const archives = (state.archiveCache || []).filter(r => r && r.status === 'archived');
   if (allowRestore && settings.autoRestore) {
     for (const record of archives) {
-      if (!record?.childKey || !record?.pointer) continue;
+      if (!record?.childKey || !record?.pointer || !record?.sourcePath) continue;
       if (!textMentionsKey(text, record.childKey)) continue;
       if (getByPointer(stat, record.pointer) !== undefined) continue;
-      return { action: 'restore', record, reason: `最近消息提到了“${record.childKey}”` };
+      const parent = getByPointer(stat, record.sourcePath);
+      if (!parent || typeof parent !== 'object' || Array.isArray(parent)) continue;
+      return { action: 'restore', record, reason: `最近上下文或热状态重新引用了“${record.childKey}”` };
     }
   }
 
@@ -137,7 +191,7 @@ function buildPreview(state, options = {}) {
         action: 'archive',
         container,
         candidate,
-        reason: `${container.path} 已有 ${container.count} 项，候选项闲置超过 ${settings.minIdleMessages} 条消息`,
+        reason: `${container.path} 已有 ${container.count} 项，候选项达到闲置与容量阈值`,
       };
     }
   }
@@ -154,7 +208,7 @@ function buildFutureSimulation(state, futureMessages = FUTURE_SIM_MESSAGES) {
   if (!liveContainers.length) return { action: 'none', reason: '当前没有可托管的对象容器' };
 
   const nowCount = messageCount();
-  const text = recentUserText(cfg.recentMentionMessages);
+  const text = protectionText(stat);
 
   for (const live of liveContainers) {
     const result = simulateFutureArchiveCandidate({
@@ -172,6 +226,7 @@ function buildFutureSimulation(state, futureMessages = FUTURE_SIM_MESSAGES) {
         candidate: result.candidate,
         simulatedCount: result.simulatedMessageCount,
         virtualCount: result.virtualCount,
+        effectiveMin: result.effectiveMin,
         reason: `只读模拟：假设 ${live.path} 增长到 ${result.virtualCount} 项，且现有条目再闲置 ${futureMessages} 条消息`,
       };
     }
@@ -193,7 +248,7 @@ async function runCycle({ ignoreCooldown = false } = {}) {
   if (!ignoreCooldown && Date.now() - lastActionAt < cfg.actionCooldownMs) return;
 
   const vab = getVab();
-  if (!vab?.getState || !vab?.refreshCurrent) {
+  if (!vab?.getState || !vab?.refreshCurrent || !vab?.archiveChild || !vab?.restoreArchive) {
     statusText = '归档桥核心未就绪';
     updateUi();
     return;
@@ -205,6 +260,10 @@ async function runCycle({ ignoreCooldown = false } = {}) {
     let state = getState();
     if (!state?.latestMvu?.statData || !state?.current?.scopeKey) {
       statusText = '当前没有MVU';
+      return;
+    }
+    if (legacyAutoEnabled(state)) {
+      statusText = '检测到旧版“自动归档总开关”已开启；为避免双引擎同时改变量，智能托管暂停';
       return;
     }
 
@@ -252,6 +311,14 @@ function stopCycleTimer() {
 }
 
 function setEnabled(value) {
+  if (value && legacyAutoEnabled(getState())) {
+    cfg.enabled = false;
+    statusText = '无法开启：旧版“自动归档总开关”仍开启，请只保留一个自动引擎';
+    saveCfg();
+    stopCycleTimer();
+    updateUi();
+    return;
+  }
   cfg.enabled = !!value;
   saveCfg();
   statusText = cfg.enabled ? '已开启，等待安全阈值' : '未启用';
@@ -281,12 +348,12 @@ function ensureUi() {
       <button class="menu_button" data-vab-safe-simulate>模拟未来闲置60条</button>
       <button class="menu_button" data-vab-safe-run>执行一次（需先开启）</button>
     </div>
-    <div class="vab-note">“模拟未来闲置60条”只在内存副本中假设容器已经膨胀，不写MVU、不写冷档案、不写活动记录。</div>
+    <div class="vab-note">模拟功能只使用内存副本。正式候选还会保护最近8条双方消息，以及玩家/当前状态/任务/队伍等热状态里引用到的对象。</div>
     <div class="vab-note" data-vab-safe-status></div>
     <details>
       <summary>高级阈值</summary>
       <label>至少聊天楼数 <input class="vab-num" type="number" min="20" data-vab-safe-minmsg></label>
-      <label>至少子项数 <input class="vab-num" type="number" min="10" data-vab-safe-minchildren></label>
+      <label>小对象基础上限 <input class="vab-num" type="number" min="10" data-vab-safe-minchildren></label>
       <label>至少闲置消息 <input class="vab-num" type="number" min="10" data-vab-safe-idle></label>
       <label>最小容器KB <input class="vab-num" type="number" min="1" data-vab-safe-kb></label>
     </details>`;
@@ -320,7 +387,7 @@ function ensureUi() {
       await getVab()?.refreshCurrent?.({ render: false });
       const simulation = buildFutureSimulation(getState(), FUTURE_SIM_MESSAGES);
       if (simulation.action === 'archive') {
-        statusText = `模拟候选：${simulation.container.path}/${simulation.candidate.key} · ${simulation.reason} · 未修改真实数据`;
+        statusText = `模拟候选：${simulation.container.path}/${simulation.candidate.key} · ${simulation.reason} · 动态热区阈值${simulation.effectiveMin} · 未修改真实数据`;
       } else {
         statusText = `模拟结果：${simulation.reason} · 未修改真实数据`;
       }
