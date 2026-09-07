@@ -1,0 +1,29 @@
+[PASS] manifest display_name
+[PASS] manifest version matches
+[PASS] no hard extension dependency
+[PASS] auto archive default OFF
+[PASS] memory mirror default OFF
+[PASS] IndexedDB archives store
+[PASS] IndexedDB snapshots store
+[PASS] MVU read API
+[PASS] MVU write API
+[PASS] snapshot not skipped by busy lock
+[PASS] archive transaction ordering
+[PASS] schema rehydration verification
+[PASS] restore snapshot before MVU write
+[PASS] restore prevents silent overwrite
+[PASS] auto archive requires global switch
+[PASS] auto archive respects zero target
+[PASS] auto archive one child per cycle
+[PASS] Macro Engine 2.0 registration
+[PASS] legacy macro fallback
+[PASS] hot/cold duplicate suppression
+[PASS] MVU precedence in injected context
+[PASS] Memory Enhancement optional adapter
+[PASS] memory duplicate mirror guard
+[PASS] memory table insertion uses external adapter
+[PASS] Android CSS escape fallback
+[PASS] no external network fetch
+[PASS] diagnostic global exposed
+
+TOTAL: 27/27 PASS
