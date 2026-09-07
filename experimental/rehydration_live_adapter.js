@@ -135,33 +135,44 @@ function assertSameScope(actual, expected, phase) {
   }
 }
 
-async function ensureNotGenerating(phase) {
-  const flags = await generationFlags();
+async function ensureNotGenerating(phase, readGenerationFlags = generationFlags) {
+  const flags = await readGenerationFlags();
   if (flags.active) throw new Error(`${phase}：当前正在生成消息，禁止重激活写入`);
 }
 
-export function createRehydrationLiveIo() {
+export function createRehydrationLiveIo(overrides = {}) {
+  // Dependency injection exists for CI contract tests. Normal runtime passes no overrides.
+  const deps = {
+    refreshSnapshot,
+    getArchiveById,
+    putArchiveRecord,
+    getVab,
+    getMvu,
+    generationFlags,
+    ...overrides,
+  };
+
   return {
     async refresh() {
-      return refreshSnapshot();
+      return deps.refreshSnapshot();
     },
 
     async getArchive(recordId, requestedScope) {
-      const record = await getArchiveById(recordId);
+      const record = await deps.getArchiveById(recordId);
       if (!record) return null;
       if (String(record.scopeKey || '') !== String(requestedScope || '')) return null;
       return clone(record);
     },
 
     async saveSnapshot(_before, reason) {
-      const vab = getVab();
+      const vab = deps.getVab();
       if (!vab?.saveSnapshot) throw new Error('VAB快照API不可用');
       return await vab.saveSnapshot(reason || 'before-rehydration-merge');
     },
 
     async writeMerged(path, merged, fresh) {
-      await ensureNotGenerating('写入前');
-      const now = await refreshSnapshot();
+      await ensureNotGenerating('写入前', deps.generationFlags);
+      const now = await deps.refreshSnapshot();
       assertSameScope(now.scopeKey, fresh.scopeKey, '写入前复核');
       if (Number(now.messageId) !== Number(fresh.messageId)) {
         throw new Error('写入前最新MVU楼层已变化，放弃本次写入');
@@ -172,7 +183,7 @@ export function createRehydrationLiveIo() {
         throw new Error('写入前目标热节点发生变化，检测到竞态，放弃本次写入');
       }
 
-      const mvu = getMvu();
+      const mvu = deps.getMvu();
       if (!mvu?.replaceMvuData) throw new Error('Mvu.replaceMvuData不可用');
       const vars = clone(now.variables);
       const stat = clone(now.statData);
@@ -186,11 +197,11 @@ export function createRehydrationLiveIo() {
     },
 
     async markRestored(record, meta) {
-      await ensureNotGenerating('提交冷档案状态前');
-      const now = await refreshSnapshot();
+      await ensureNotGenerating('提交冷档案状态前', deps.generationFlags);
+      const now = await deps.refreshSnapshot();
       assertSameScope(now.scopeKey, record.scopeKey, '冷档案状态提交');
 
-      const latestRecord = await getArchiveById(record.id);
+      const latestRecord = await deps.getArchiveById(record.id);
       if (!latestRecord) throw new Error('提交时冷档案已不存在');
       if (String(latestRecord.scopeKey || '') !== now.scopeKey) throw new Error('冷档案scope不匹配');
       if (latestRecord.status !== 'archived') throw new Error(`冷档案状态已变化：${latestRecord.status}`);
@@ -198,18 +209,18 @@ export function createRehydrationLiveIo() {
       latestRecord.status = 'restored';
       latestRecord.restoredAt = Date.now();
       latestRecord.rehydratedMeta = clone(meta || {});
-      await putArchiveRecord(latestRecord);
-      try { await getVab()?.refreshCurrent?.({ render: false }); } catch {}
+      await deps.putArchiveRecord(latestRecord);
+      try { await deps.getVab()?.refreshCurrent?.({ render: false }); } catch {}
     },
 
     async rollback(_snapshot, beforeWrite) {
-      const now = await refreshSnapshot();
+      const now = await deps.refreshSnapshot();
       assertSameScope(now.scopeKey, beforeWrite.scopeKey, '回滚');
       if (Number(now.messageId) !== Number(beforeWrite.messageId)) {
         throw new Error('回滚时最新MVU楼层已变化，禁止向旧楼层盲写');
       }
 
-      const mvu = getMvu();
+      const mvu = deps.getMvu();
       if (!mvu?.replaceMvuData) throw new Error('回滚时Mvu.replaceMvuData不可用');
       const vars = clone(now.variables);
       vars.stat_data = clone(beforeWrite.statData);
@@ -222,4 +233,6 @@ export const RehydrationLiveAdapterDiagnostics = {
   refreshSnapshot,
   getArchiveById,
   generationFlags,
+  getByPointer,
+  setByPointer,
 };
