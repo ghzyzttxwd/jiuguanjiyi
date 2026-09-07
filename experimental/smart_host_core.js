@@ -106,6 +106,60 @@ export function textMentionsKey(text, key) {
   return hay.includes(needle);
 }
 
+export function collectHotAnchorText(statData, { maxChars = 8000, maxDepth = 4 } = {}) {
+  if (!statData || typeof statData !== 'object' || Array.isArray(statData)) return '';
+
+  const hotField = /(当前|current|任务|task|队伍|小队|同行|同伴|party|team|正在|active|主修|装备中|equipped|锁定|target|目标)/i;
+  const coldCollection = /(人物|角色|npc|character|武学|技能|skill|能力|ability|装备库|背包|inventory|物品|item|资产|asset|世界档案|world.?archive|历史档案|关系档案)/i;
+  const parts = [];
+  let used = 0;
+
+  const push = (value) => {
+    if (used >= maxChars) return;
+    const text = String(value ?? '').trim();
+    if (!text) return;
+    const clipped = text.slice(0, Math.min(1000, maxChars - used));
+    if (!clipped) return;
+    parts.push(clipped);
+    used += clipped.length + 1;
+  };
+
+  const flattenHot = (value, depth = 0) => {
+    if (used >= maxChars || value == null || depth > 2) return;
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+      push(value);
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value.slice(0, 30)) flattenHot(item, depth + 1);
+      return;
+    }
+    if (typeof value !== 'object') return;
+    for (const [key, child] of Object.entries(value).slice(0, 40)) {
+      push(key);
+      flattenHot(child, depth + 1);
+      if (used >= maxChars) break;
+    }
+  };
+
+  const walk = (node, depth = 0) => {
+    if (!node || typeof node !== 'object' || Array.isArray(node) || depth > maxDepth || used >= maxChars) return;
+    for (const [key, child] of Object.entries(node)) {
+      if (hotField.test(key)) {
+        push(key);
+        flattenHot(child);
+        continue;
+      }
+      if (coldCollection.test(key)) continue;
+      if (child && typeof child === 'object' && !Array.isArray(child)) walk(child, depth + 1);
+      if (used >= maxChars) break;
+    }
+  };
+
+  walk(statData, 0);
+  return parts.join('\n').slice(0, maxChars);
+}
+
 export function effectiveMinChildren(container, settings = {}) {
   const cfg = { ...DEFAULT_SMART_HOST_SETTINGS, ...settings };
   const count = Math.max(1, Number(container?.count || container?.entries?.length || 1));
@@ -142,17 +196,20 @@ export function selectArchiveCandidate({ container, activity = {}, messageCount 
       key,
       size: byteSize(value),
       lastTouched: activity[key]?.lastTouched ?? messageCount,
+      effectiveMin,
     }))
     .filter(item => messageCount - item.lastTouched >= cfg.minIdleMessages)
     .filter(item => !textMentionsKey(recentText, item.key))
-    .sort((a, b) => a.lastTouched - b.lastTouched || b.size - a.size);
+    .sort((a, b) => a.lastTouched - b.lastTouched || b.size - a.size || String(a.key).localeCompare(String(b.key)));
 
   return candidates[0] || null;
 }
 
 export function updateActivity({ containers, prior = {}, messageCount = 0 }) {
   const next = structuredClone(prior || {});
+  const livePaths = new Set();
   for (const container of containers || []) {
+    livePaths.add(container.path);
     const bucket = next[container.path] ||= {};
     const liveKeys = new Set();
     for (const [key, value] of container.entries) {
@@ -167,6 +224,9 @@ export function updateActivity({ containers, prior = {}, messageCount = 0 }) {
     for (const key of Object.keys(bucket)) {
       if (!liveKeys.has(key)) delete bucket[key];
     }
+  }
+  for (const path of Object.keys(next)) {
+    if (!livePaths.has(path)) delete next[path];
   }
   return next;
 }
@@ -192,10 +252,7 @@ export function simulateFutureArchiveCandidate({
   const neededCount = Math.max(effectiveMin + 1, cfg.targetChildren + 1, virtualEntries.length);
 
   for (let i = virtualEntries.length; i < neededCount; i++) {
-    virtualEntries.push([
-      `__模拟新增_${i + 1}`,
-      { simulationOnly: true },
-    ]);
+    virtualEntries.push([`__模拟新增_${i + 1}`, { simulationOnly: true }]);
   }
 
   const virtualContainer = {
@@ -226,6 +283,6 @@ export function simulateFutureArchiveCandidate({
     candidate,
     virtualCount: virtualContainer.count,
     simulatedMessageCount: simulatedCount,
-    effectiveMin,
+    effectiveMin: candidate.effectiveMin ?? effectiveMin,
   };
 }
