@@ -7,11 +7,12 @@ import {
   updateActivity,
 } from './smart_host_core.js';
 
-const VERSION = '0.2.0-rc1';
-const SETTINGS_KEY = 'vab.smartHost.safe.settings.v2';
-const ACTIVITY_KEY = 'vab.smartHost.safe.activity.v2';
+const VERSION = '0.2.0-rc2';
+const SETTINGS_KEY = 'vab.smartHost.safe.settings.v3';
+const ACTIVITY_KEY = 'vab.smartHost.safe.activity.v3';
 const UI_INTERVAL_MS = 2500;
 const CYCLE_INTERVAL_MS = 15000;
+const FUTURE_SIM_MESSAGES = 60;
 
 let mounted = false;
 let cycleTimer = null;
@@ -41,7 +42,7 @@ function loadJson(key, fallback) {
   }
 }
 
-let cfg = { ...defaults, ...loadJson(SETTINGS_KEY, defaults) };
+let cfg = { ...defaults, ...loadJson(SETTINGS_KEY, defaults), enabled: false };
 let activity = loadJson(ACTIVITY_KEY, {});
 
 function saveCfg() {
@@ -100,18 +101,20 @@ function refreshActivity(state) {
   return containers;
 }
 
-function buildPreview(state) {
+function buildPreview(state, options = {}) {
   const stat = state?.latestMvu?.statData;
   const scopeKey = state?.current?.scopeKey;
   if (!stat || !scopeKey) return { action: 'none', reason: '当前没有MVU' };
 
-  const containers = discoverContainers(stat, cfg);
-  const root = scopeBucket(scopeKey);
-  const text = recentUserText();
-  const msgCount = messageCount();
+  const settings = options.settings || cfg;
+  const containers = options.containers || discoverContainers(stat, settings);
+  const root = options.activityRoot || scopeBucket(scopeKey);
+  const text = options.recentText ?? recentUserText(settings.recentMentionMessages);
+  const msgCount = options.messageCount ?? messageCount();
+  const allowRestore = options.allowRestore ?? true;
 
   const archives = (state.archiveCache || []).filter(r => r && r.status === 'archived');
-  if (cfg.autoRestore) {
+  if (allowRestore && settings.autoRestore) {
     for (const record of archives) {
       if (!record?.childKey || !record?.pointer) continue;
       if (!textMentionsKey(text, record.childKey)) continue;
@@ -126,14 +129,14 @@ function buildPreview(state) {
       activity: root[container.path] || {},
       messageCount: msgCount,
       recentText: text,
-      settings: cfg,
+      settings,
     });
     if (candidate) {
       return {
         action: 'archive',
         container,
         candidate,
-        reason: `${container.path} 已有 ${container.count} 项，候选项闲置超过 ${cfg.minIdleMessages} 条消息`,
+        reason: `${container.path} 已有 ${container.count} 项，候选项闲置超过 ${settings.minIdleMessages} 条消息`,
       };
     }
   }
@@ -141,10 +144,79 @@ function buildPreview(state) {
   return { action: 'none', reason: '当前无需迁移' };
 }
 
-async function runCycle({ force = false } = {}) {
+function buildFutureSimulation(state, futureMessages = FUTURE_SIM_MESSAGES) {
+  const stat = state?.latestMvu?.statData;
+  const scopeKey = state?.current?.scopeKey;
+  if (!stat || !scopeKey) return { action: 'none', reason: '当前没有MVU' };
+
+  const liveContainers = discoverContainers(stat, cfg);
+  if (!liveContainers.length) return { action: 'none', reason: '当前没有可托管的对象容器' };
+
+  const nowCount = messageCount();
+  const simulatedCount = Math.max(cfg.minMessagesBeforeArchive + 1, nowCount + Math.max(1, futureMessages));
+  const text = recentUserText(cfg.recentMentionMessages);
+
+  for (const live of liveContainers) {
+    const virtualEntries = live.entries.map(([key, value]) => [key, clone(value)]);
+    const realKeys = new Set(virtualEntries.map(([key]) => key));
+    const neededCount = Math.max(cfg.minChildren + 1, cfg.targetChildren + 1, virtualEntries.length);
+
+    for (let i = virtualEntries.length; i < neededCount; i++) {
+      virtualEntries.push([
+        `__模拟新增_${i + 1}`,
+        { 模拟占位: true, 说明: '仅用于只读压力模拟，不存在于真实MVU' },
+      ]);
+    }
+
+    const virtual = {
+      ...live,
+      entries: virtualEntries,
+      count: virtualEntries.length,
+      size: Math.max(live.size, cfg.minContainerBytes + 1),
+    };
+
+    const activityRoot = { [live.path]: {} };
+    for (const [key] of virtualEntries) {
+      activityRoot[live.path][key] = {
+        hash: 'simulation',
+        lastTouched: realKeys.has(key) ? nowCount : simulatedCount,
+      };
+    }
+
+    const candidate = selectArchiveCandidate({
+      container: virtual,
+      activity: activityRoot[live.path],
+      messageCount: simulatedCount,
+      recentText: text,
+      settings: cfg,
+    });
+
+    if (candidate && realKeys.has(candidate.key)) {
+      return {
+        action: 'archive',
+        container: live,
+        candidate,
+        simulatedCount,
+        virtualCount: virtual.count,
+        reason: `只读模拟：假设 ${live.path} 增长到 ${virtual.count} 项，且现有条目再闲置 ${futureMessages} 条消息`,
+      };
+    }
+  }
+
+  return {
+    action: 'none',
+    reason: `只读模拟完成：即使假设未来再闲置 ${futureMessages} 条消息，也没有安全候选`,
+  };
+}
+
+async function runCycle({ ignoreCooldown = false } = {}) {
   if (busy) return;
-  if (!cfg.enabled && !force) return;
-  if (!force && Date.now() - lastActionAt < cfg.actionCooldownMs) return;
+  if (!cfg.enabled) {
+    statusText = '未启用 · 不执行任何迁移';
+    updateUi();
+    return;
+  }
+  if (!ignoreCooldown && Date.now() - lastActionAt < cfg.actionCooldownMs) return;
 
   const vab = getVab();
   if (!vab?.getState || !vab?.refreshCurrent) {
@@ -227,13 +299,15 @@ function ensureUi() {
   box.open = true;
   box.innerHTML = `
     <summary>🧠 智能托管候选版 ${VERSION}</summary>
-    <div class="vab-note">安全版：没有 MutationObserver；关闭时没有后台归档循环。开启后也只在满足“数量/体积/闲置消息”三重阈值时，每次迁移1项，并继续调用归档桥已验证的快照→迁移→验证链。</div>
+    <div class="vab-note">安全版：没有 MutationObserver；每次手动载入都强制从“关闭”开始。不开总开关时，执行按钮也不能迁移数据。</div>
     <label class="checkbox_label"><input type="checkbox" data-vab-safe-enabled> 智能托管</label>
     <label class="checkbox_label"><input type="checkbox" data-vab-safe-restore> 提到冷档案时自动恢复</label>
     <div class="vab-actions">
       <button class="menu_button" data-vab-safe-preview>只读检查</button>
-      <button class="menu_button" data-vab-safe-run>执行一次</button>
+      <button class="menu_button" data-vab-safe-simulate>模拟未来闲置60条</button>
+      <button class="menu_button" data-vab-safe-run>执行一次（需先开启）</button>
     </div>
+    <div class="vab-note">“模拟未来闲置60条”只在内存副本中假设容器已经膨胀，不写MVU、不写冷档案、不写活动记录。</div>
     <div class="vab-note" data-vab-safe-status></div>
     <details>
       <summary>高级阈值</summary>
@@ -267,7 +341,21 @@ function ensureUi() {
     }
     updateUi();
   });
-  box.querySelector('[data-vab-safe-run]')?.addEventListener('click', () => runCycle({ force: true }));
+  box.querySelector('[data-vab-safe-simulate]')?.addEventListener('click', async () => {
+    try {
+      await getVab()?.refreshCurrent?.({ render: false });
+      const simulation = buildFutureSimulation(getState(), FUTURE_SIM_MESSAGES);
+      if (simulation.action === 'archive') {
+        statusText = `模拟候选：${simulation.container.path}/${simulation.candidate.key} · ${simulation.reason} · 未修改真实数据`;
+      } else {
+        statusText = `模拟结果：${simulation.reason} · 未修改真实数据`;
+      }
+    } catch (error) {
+      statusText = `模拟异常：${error?.message || error}`;
+    }
+    updateUi();
+  });
+  box.querySelector('[data-vab-safe-run]')?.addEventListener('click', () => runCycle({ ignoreCooldown: true }));
 
   const bindNum = (selector, key, transform) => {
     box.querySelector(selector)?.addEventListener('change', e => {
@@ -310,17 +398,24 @@ function updateUi() {
   setValue('[data-vab-safe-idle]', cfg.minIdleMessages);
   setValue('[data-vab-safe-kb]', Math.max(1, Math.round(cfg.minContainerBytes / 1024)));
   setText('[data-vab-safe-status]', `${cfg.enabled ? '●' : '○'} ${statusText}`);
+
+  const runButton = box.querySelector('[data-vab-safe-run]');
+  if (runButton) runButton.disabled = !cfg.enabled || busy;
 }
 
 export function mountSmartHostSafe() {
   if (mounted) return;
   mounted = true;
+  cfg.enabled = false;
+  saveCfg();
+  statusText = '未启用 · 候选模块已安全载入';
   ensureUi();
   uiTimer = setInterval(ensureUi, UI_INTERVAL_MS);
   startCycleTimer();
 }
 
 export function unmountSmartHostSafe() {
+  setEnabled(false);
   stopCycleTimer();
   if (uiTimer) clearInterval(uiTimer);
   uiTimer = null;
@@ -333,5 +428,6 @@ export const SmartHostSafeDiagnostics = {
   getSettings: () => clone(cfg),
   getStatus: () => statusText,
   preview: () => buildPreview(getState()),
-  runOnce: () => runCycle({ force: true }),
+  simulateFuture: (futureMessages = FUTURE_SIM_MESSAGES) => buildFutureSimulation(getState(), futureMessages),
+  runOnce: () => runCycle({ ignoreCooldown: true }),
 };
