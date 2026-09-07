@@ -45,6 +45,8 @@ jobs:
           node --check experimental/rehydration_core.js
           node --check experimental/rehydration_transaction.js
           node --check experimental/rehydration_safe.js
+          node --check experimental/rehydration_live_adapter.js
+          node --check experimental/rehydration_live_safe.js
           node --check experimental/test_smart_host_stress.mjs
           node --check experimental/test_recall_core.mjs
           node --check experimental/test_recall_delivery_core.mjs
@@ -57,7 +59,7 @@ jobs:
       - name: Safety invariants
         shell: bash
         run: |
-          if grep -R "new MutationObserver" bootstrap.js smart_scan.js safe_loader.js experimental/smart_host_safe.js experimental/recall_safe.js experimental/rehydration_safe.js; then
+          if grep -R "new MutationObserver" bootstrap.js smart_scan.js safe_loader.js experimental/smart_host_safe.js experimental/recall_safe.js experimental/rehydration_safe.js experimental/rehydration_live_safe.js; then
             echo 'Forbidden MutationObserver found in active or candidate UI code.'
             exit 1
           fi
@@ -90,7 +92,7 @@ jobs:
           ! grep -q "archiveChild" experimental/recall_safe.js
           ! grep -q "restoreArchive" experimental/recall_safe.js
 
-          # Rehydration core/UI stay read-only; the transaction engine is dependency-injected and has no direct browser/storage/MVU APIs.
+          # Read-only rehydration core/UI stay read-only; transaction engine itself is dependency-injected.
           grep -q "merge-hot-over-cold" experimental/rehydration_core.js
           grep -q "只读" experimental/rehydration_safe.js
           grep -q "rollbackSafely" experimental/rehydration_transaction.js
@@ -106,10 +108,26 @@ jobs:
           ! grep -q "indexedDB" experimental/rehydration_transaction.js
           ! grep -q "window.Mvu" experimental/rehydration_transaction.js
 
+          # Live rehydration writer is isolated behind two manual gates and never arms persistently.
+          grep -q "let armed = false" experimental/rehydration_live_safe.js
+          grep -q "executeOne" experimental/rehydration_live_safe.js
+          grep -q "confirm" experimental/rehydration_live_safe.js
+          grep -q "isGenerationActive" experimental/rehydration_live_safe.js
+          grep -q "armed = false" experimental/rehydration_live_safe.js
+          ! grep -q "replaceMvuData" experimental/rehydration_live_safe.js
+          ! grep -q "indexedDB" experimental/rehydration_live_safe.js
+          grep -q "replaceMvuData" experimental/rehydration_live_adapter.js
+          grep -q "indexedDB" experimental/rehydration_live_adapter.js
+          grep -q "scope已变化" experimental/rehydration_live_adapter.js
+          grep -q "正在生成消息" experimental/rehydration_live_adapter.js
+          grep -q "竞态" experimental/rehydration_live_adapter.js
+
           # Production startup remains inert. Candidate code may only be dynamically imported by the explicit safety gate.
           grep -q "import('./experimental/smart_host_safe.js')" safe_loader.js
           grep -q "import('./experimental/recall_safe.js')" safe_loader.js
           grep -q "import('./experimental/rehydration_safe.js')" safe_loader.js
+          grep -q "import('./experimental/rehydration_live_safe.js')" safe_loader.js
           ! grep -q "import './experimental/smart_host_safe.js'" bootstrap.js
           ! grep -q "recall_safe" bootstrap.js
           ! grep -q "rehydration_safe" bootstrap.js
+          ! grep -q "rehydration_live_safe" bootstrap.js
