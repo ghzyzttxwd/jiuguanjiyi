@@ -29,6 +29,8 @@ jobs:
         run: node experimental/test_recall_delivery_core.mjs
       - name: Rehydration planning tests
         run: node experimental/test_rehydration_core.mjs
+      - name: End-to-end cold memory lifecycle
+        run: node experimental/test_memory_pipeline_e2e.mjs
       - name: Long-session stress simulation
         run: node experimental/test_smart_host_stress.mjs
       - name: Syntax checks
@@ -44,6 +46,7 @@ jobs:
           node --check experimental/test_recall_core.mjs
           node --check experimental/test_recall_delivery_core.mjs
           node --check experimental/test_rehydration_core.mjs
+          node --check experimental/test_memory_pipeline_e2e.mjs
           node --check safe_loader.js
           node --check smart_scan.js
           node --check bootstrap.js
