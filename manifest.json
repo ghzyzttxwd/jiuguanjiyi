@@ -1,0 +1,12 @@
+{
+  "display_name": "变量归档桥",
+  "loading_order": 120,
+  "requires": [],
+  "optional": [],
+  "js": "index.js",
+  "css": "style.css",
+  "author": "OpenAI + user",
+  "version": "0.1.1",
+  "homePage": "",
+  "auto_update": false
+}
