@@ -99,9 +99,10 @@ assert.equal(Object.keys(after.玩家.武学).length, Object.keys(before.玩家.
 assert.equal(Object.keys(after.世界档案).length, Object.keys(before.世界档案).length);
 
 const hotFinal = collectHotAnchorText(stat);
-assert(hotFinal.includes('武学60'));
-assert(hotFinal.includes('人物100'));
-assert(!hotFinal.includes('人物1'));
+const hotTokens = new Set(hotFinal.split('\n').map(x => x.trim()).filter(Boolean));
+assert(hotTokens.has('武学60'));
+assert(hotTokens.has('人物100'));
+assert(!hotTokens.has('人物1'));
 
 console.log(JSON.stringify({
   ok: true,
