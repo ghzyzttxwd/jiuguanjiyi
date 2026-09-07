@@ -21,22 +21,27 @@ jobs:
           node-version: '22'
       - name: Treat JS as ES modules for tests
         run: printf '{"type":"module"}\n' > package.json
-      - name: Core logic tests
+      - name: Smart host core tests
         run: node experimental/test_smart_host_core.mjs
+      - name: Cold recall core tests
+        run: node experimental/test_recall_core.mjs
       - name: Long-session stress simulation
         run: node experimental/test_smart_host_stress.mjs
       - name: Syntax checks
         run: |
           node --check experimental/smart_host_core.js
           node --check experimental/smart_host_safe.js
+          node --check experimental/recall_core.js
+          node --check experimental/recall_safe.js
           node --check experimental/test_smart_host_stress.mjs
+          node --check experimental/test_recall_core.mjs
           node --check safe_loader.js
           node --check smart_scan.js
           node --check bootstrap.js
       - name: Safety invariants
         shell: bash
         run: |
-          if grep -R "new MutationObserver" bootstrap.js smart_scan.js safe_loader.js experimental/smart_host_safe.js; then
+          if grep -R "new MutationObserver" bootstrap.js smart_scan.js safe_loader.js experimental/smart_host_safe.js experimental/recall_safe.js; then
             echo 'Forbidden MutationObserver found in active or candidate UI code.'
             exit 1
           fi
@@ -46,12 +51,25 @@ jobs:
           grep -q "removeListener" experimental/smart_host_safe.js
           grep -q "MAX_ERRORS_IN_WINDOW" experimental/smart_host_safe.js
           if grep -q "CYCLE_INTERVAL_MS" experimental/smart_host_safe.js; then
-            echo 'Periodic archive cycle reintroduced; RC4 must remain event-driven.'
+            echo 'Periodic archive cycle reintroduced; smart host must remain event-driven.'
             exit 1
           fi
           if grep -Eq "setInterval\([^\n]*runCycle" experimental/smart_host_safe.js; then
             echo 'Periodic runCycle polling detected; forbidden in candidate.'
             exit 1
           fi
+
+          # Recall layer must be isolated, default-off, clear its own prompt, and never write MVU.
+          grep -q "let enabled = false" experimental/recall_safe.js
+          grep -q "PROMPT_KEY = 'vab_cold_recall'" experimental/recall_safe.js
+          grep -q "setExtensionPrompt" experimental/recall_safe.js
+          grep -q "removeListener" experimental/recall_safe.js
+          grep -q "clearInjection" experimental/recall_safe.js
+          ! grep -q "replaceMvuData" experimental/recall_safe.js
+          ! grep -q "archiveChild" experimental/recall_safe.js
+          ! grep -q "restoreArchive" experimental/recall_safe.js
+
+          # Production startup still lazy-loads only the tested smart-host candidate.
           grep -q "import('./experimental/smart_host_safe.js')" safe_loader.js
           ! grep -q "import './experimental/smart_host_safe.js'" bootstrap.js
+          ! grep -q "recall_safe" bootstrap.js
