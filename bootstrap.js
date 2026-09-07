@@ -1,9 +1,8 @@
-// Variable Archive Bridge v0.2.0 bootstrap
-// Mobile-safe drawer handling + smart path scan + smart lifecycle hosting.
+// Variable Archive Bridge v0.1.3 bootstrap
+// Emergency rollback: keep only the previously verified core + smart path scanner.
 
 import './index.js';
 import './smart_scan.js';
-import './smart_host.js';
 
 (function installVabDrawerFix() {
     if (window.__VAB_DRAWER_FIX_INSTALLED__) return;
