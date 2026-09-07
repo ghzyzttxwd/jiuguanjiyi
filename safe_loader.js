@@ -27,7 +27,7 @@
         box.innerHTML = `
           <summary>🧪 智能托管安全测试入口</summary>
           <div class="vab-note">
-            正常启动不会载入任何实验模块。只有你主动点击“加载候选模块”时，才临时载入智能托管、冷档案召回与重激活合并预览；所有实际自动开关仍保持关闭，重激活模块目前更是纯只读。重启酒馆后不会自动再次载入。
+            正常启动不会载入任何实验模块。只有你主动点击“加载候选模块”时，才临时载入智能托管、冷档案召回、重激活只读预览，以及双重确认的手动重激活事务候选。所有自动功能与写入武装状态仍保持关闭；重启酒馆后不会自动再次载入。
           </div>
           <div class="vab-actions">
             <button class="menu_button" data-vab-safe-load>加载候选模块</button>
@@ -52,12 +52,13 @@
         loadBtn?.addEventListener('click', async () => {
             if (loading || loadedModules) return;
             loading = true;
-            statusText = '正在载入安全候选模块（只加载，自动功能全部保持关闭）…';
+            statusText = '正在载入安全候选模块（只加载，自动功能与写入武装全部保持关闭）…';
             sync();
 
             let smart = null;
             let recall = null;
             let rehydration = null;
+            let rehydrationLive = null;
             try {
                 smart = await import('./experimental/smart_host_safe.js');
                 if (typeof smart.mountSmartHostSafe !== 'function') {
@@ -77,9 +78,16 @@
                 }
                 rehydration.mountRehydrationSafe();
 
-                loadedModules = { smart, recall, rehydration };
-                statusText = '候选模块已载入；智能托管与实际Prompt召回都仍关闭，重激活合并仅提供只读预览。';
+                rehydrationLive = await import('./experimental/rehydration_live_safe.js');
+                if (typeof rehydrationLive.mountRehydrationLiveSafe !== 'function') {
+                    throw new Error('手动重激活事务候选缺少 mountRehydrationLiveSafe()');
+                }
+                rehydrationLive.mountRehydrationLiveSafe();
+
+                loadedModules = { smart, recall, rehydration, rehydrationLive };
+                statusText = '候选模块已载入；自动托管、实际Prompt召回、重激活写入均仍关闭。手动重激活还需要在独立区域再次武装并逐条确认。';
             } catch (error) {
+                try { rehydrationLive?.unmountRehydrationLiveSafe?.(); } catch {}
                 try { rehydration?.unmountRehydrationSafe?.(); } catch {}
                 try { await recall?.unmountRecallSafe?.(); } catch {}
                 try { smart?.unmountSmartHostSafe?.(); } catch {}
@@ -98,6 +106,7 @@
             statusText = '正在卸载候选模块…';
             sync();
             try {
+                loadedModules.rehydrationLive?.unmountRehydrationLiveSafe?.();
                 loadedModules.rehydration?.unmountRehydrationSafe?.();
                 await loadedModules.recall?.unmountRecallSafe?.();
                 loadedModules.smart?.unmountSmartHostSafe?.();
