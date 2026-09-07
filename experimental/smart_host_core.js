@@ -7,7 +7,7 @@ export const DEFAULT_SMART_HOST_SETTINGS = Object.freeze({
   maxDepth: 4,
   minObjectRatio: 0.7,
   maxScalarRatio: 0.25,
-  recentMentionMessages: 4,
+  recentMentionMessages: 8,
 });
 
 export function escapePointerSegment(value) {
@@ -106,14 +106,35 @@ export function textMentionsKey(text, key) {
   return hay.includes(needle);
 }
 
+export function effectiveMinChildren(container, settings = {}) {
+  const cfg = { ...DEFAULT_SMART_HOST_SETTINGS, ...settings };
+  const count = Math.max(1, Number(container?.count || container?.entries?.length || 1));
+  const size = Math.max(0, Number(container?.size || 0));
+  const avg = size / count;
+  let limit = Math.max(5, Number(cfg.minChildren) || 30);
+
+  if (avg >= 8 * 1024) limit = Math.min(limit, 6);
+  else if (avg >= 4 * 1024) limit = Math.min(limit, 8);
+  else if (avg >= 2 * 1024) limit = Math.min(limit, 12);
+  else if (avg >= 1024) limit = Math.min(limit, 18);
+  else if (avg >= 512) limit = Math.min(limit, 24);
+
+  if (size >= cfg.minContainerBytes * 4) limit = Math.min(limit, 5);
+  else if (size >= cfg.minContainerBytes * 2) limit = Math.min(limit, 8);
+
+  return Math.max(5, limit);
+}
+
 export function selectArchiveCandidate({ container, activity = {}, messageCount = 0, recentText = '', settings = {} }) {
   const cfg = { ...DEFAULT_SMART_HOST_SETTINGS, ...settings };
   if (!container) return null;
   if (messageCount < cfg.minMessagesBeforeArchive) return null;
-  if (container.count <= cfg.minChildren) return null;
-  if (container.size < cfg.minContainerBytes && container.count < cfg.minChildren * 2) return null;
 
-  const target = Math.max(8, Math.min(cfg.targetChildren, cfg.minChildren));
+  const effectiveMin = effectiveMinChildren(container, cfg);
+  if (container.count <= effectiveMin) return null;
+  if (container.size < cfg.minContainerBytes && container.count < effectiveMin * 2) return null;
+
+  const target = Math.max(4, Math.min(cfg.targetChildren, Math.max(4, Math.floor(effectiveMin * 0.75))));
   if (container.count <= target) return null;
 
   const candidates = container.entries
@@ -167,7 +188,8 @@ export function simulateFutureArchiveCandidate({
 
   const realKeys = new Set(container.entries.map(([key]) => key));
   const virtualEntries = container.entries.map(([key, value]) => [key, value]);
-  const neededCount = Math.max(cfg.minChildren + 1, cfg.targetChildren + 1, virtualEntries.length);
+  const effectiveMin = effectiveMinChildren(container, cfg);
+  const neededCount = Math.max(effectiveMin + 1, cfg.targetChildren + 1, virtualEntries.length);
 
   for (let i = virtualEntries.length; i < neededCount; i++) {
     virtualEntries.push([
@@ -204,5 +226,6 @@ export function simulateFutureArchiveCandidate({
     candidate,
     virtualCount: virtualContainer.count,
     simulatedMessageCount: simulatedCount,
+    effectiveMin,
   };
 }
