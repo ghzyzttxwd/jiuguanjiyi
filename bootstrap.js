@@ -1,7 +1,8 @@
-// Variable Archive Bridge v0.1.2 bootstrap
-// Fixes SillyTavern inline-drawer double-toggle on some mobile builds.
+// Variable Archive Bridge v0.1.3 bootstrap
+// Mobile-safe drawer handling.
 
 import './index.js';
+import './smart_scan.js';
 
 (function installVabDrawerFix() {
     if (window.__VAB_DRAWER_FIX_INSTALLED__) return;
@@ -14,10 +15,6 @@ import './index.js';
         const toggle = target.closest('#vab-settings .inline-drawer-toggle');
         if (!toggle) return;
 
-        // The core v0.1.1 panel used SillyTavern's inline-drawer class AND bound
-        // its own anonymous click handler. On builds with native drawer handling,
-        // one tap can therefore toggle twice and appear to do nothing.
-        // Capture the tap before either handler and perform exactly one toggle.
         event.preventDefault();
         event.stopPropagation();
         event.stopImmediatePropagation();
@@ -39,7 +36,6 @@ import './index.js';
         }
 
         if (isHidden) {
-            // Refresh immediately when opening so MVU status is current.
             Promise.resolve(window.VariableArchiveBridge?.refreshCurrent?.()).catch(console.warn);
         }
     }, true);
