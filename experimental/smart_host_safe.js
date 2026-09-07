@@ -3,6 +3,7 @@ import {
   discoverContainers,
   getByPointer,
   selectArchiveCandidate,
+  simulateFutureArchiveCandidate,
   textMentionsKey,
   updateActivity,
 } from './smart_host_core.js';
@@ -153,52 +154,25 @@ function buildFutureSimulation(state, futureMessages = FUTURE_SIM_MESSAGES) {
   if (!liveContainers.length) return { action: 'none', reason: '当前没有可托管的对象容器' };
 
   const nowCount = messageCount();
-  const simulatedCount = Math.max(cfg.minMessagesBeforeArchive + 1, nowCount + Math.max(1, futureMessages));
   const text = recentUserText(cfg.recentMentionMessages);
 
   for (const live of liveContainers) {
-    const virtualEntries = live.entries.map(([key, value]) => [key, clone(value)]);
-    const realKeys = new Set(virtualEntries.map(([key]) => key));
-    const neededCount = Math.max(cfg.minChildren + 1, cfg.targetChildren + 1, virtualEntries.length);
-
-    for (let i = virtualEntries.length; i < neededCount; i++) {
-      virtualEntries.push([
-        `__模拟新增_${i + 1}`,
-        { 模拟占位: true, 说明: '仅用于只读压力模拟，不存在于真实MVU' },
-      ]);
-    }
-
-    const virtual = {
-      ...live,
-      entries: virtualEntries,
-      count: virtualEntries.length,
-      size: Math.max(live.size, cfg.minContainerBytes + 1),
-    };
-
-    const activityRoot = { [live.path]: {} };
-    for (const [key] of virtualEntries) {
-      activityRoot[live.path][key] = {
-        hash: 'simulation',
-        lastTouched: realKeys.has(key) ? nowCount : simulatedCount,
-      };
-    }
-
-    const candidate = selectArchiveCandidate({
-      container: virtual,
-      activity: activityRoot[live.path],
-      messageCount: simulatedCount,
+    const result = simulateFutureArchiveCandidate({
+      container: live,
+      messageCount: nowCount,
       recentText: text,
       settings: cfg,
+      futureMessages,
     });
 
-    if (candidate && realKeys.has(candidate.key)) {
+    if (result?.candidate) {
       return {
         action: 'archive',
         container: live,
-        candidate,
-        simulatedCount,
-        virtualCount: virtual.count,
-        reason: `只读模拟：假设 ${live.path} 增长到 ${virtual.count} 项，且现有条目再闲置 ${futureMessages} 条消息`,
+        candidate: result.candidate,
+        simulatedCount: result.simulatedMessageCount,
+        virtualCount: result.virtualCount,
+        reason: `只读模拟：假设 ${live.path} 增长到 ${result.virtualCount} 项，且现有条目再闲置 ${futureMessages} 条消息`,
       };
     }
   }
