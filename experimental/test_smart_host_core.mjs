@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {
   discoverContainers,
   selectArchiveCandidate,
+  simulateFutureArchiveCandidate,
   updateActivity,
   textMentionsKey,
   isProtectedPath,
@@ -62,6 +63,26 @@ if (smallMartial) {
   assert.equal(selectArchiveCandidate({container:smallMartial, activity:a[smallMartial.path], messageCount:200}), null);
 }
 
+const beforeSim = JSON.stringify(small);
+const simSmall = simulateFutureArchiveCandidate({
+  container: smallMartial,
+  messageCount: 132,
+  futureMessages: 60,
+  recentText: '我现在正在用武学8',
+});
+assert(simSmall);
+assert.equal(simSmall.virtualCount, 31);
+assert.notEqual(simSmall.candidate.key, '武学8');
+assert.equal(JSON.stringify(small), beforeSim);
+
+const simTooSoon = simulateFutureArchiveCandidate({
+  container: martial,
+  messageCount: 100,
+  futureMessages: 10,
+  settings: { minIdleMessages: 40, minContainerBytes: 0, minChildren: 30, targetChildren: 20, minMessagesBeforeArchive: 60 },
+});
+assert.equal(simTooSoon, null);
+
 const stress = { 人物: dict('角色', 5000, i=>({a:i,b:'z'.repeat(100)})) };
 const t0 = performance.now();
 const stressFound = discoverContainers(stress);
@@ -69,4 +90,4 @@ const elapsed = performance.now() - t0;
 assert(stressFound.some(x=>x.path === '/人物'));
 assert(elapsed < 2000);
 
-console.log(JSON.stringify({ok:true, tests:14, stressMs:Math.round(elapsed), discovered:found.map(x=>x.path)}));
+console.log(JSON.stringify({ok:true, tests:19, stressMs:Math.round(elapsed), discovered:found.map(x=>x.path), simulatedCandidate:simSmall?.candidate?.key}));
