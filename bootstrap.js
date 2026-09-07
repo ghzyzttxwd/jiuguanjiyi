@@ -1,8 +1,9 @@
-// Variable Archive Bridge v0.1.3 bootstrap
-// Emergency rollback: keep only the previously verified core + smart path scanner.
+// Variable Archive Bridge v0.1.4 bootstrap
+// Stable verified core + smart path scanner + inert safety gate.
 
 import './index.js';
 import './smart_scan.js';
+import './safe_loader.js';
 
 (function installVabDrawerFix() {
     if (window.__VAB_DRAWER_FIX_INSTALLED__) return;
