@@ -1,14 +1,16 @@
-// Variable Archive Bridge v0.2.0 helper
-// Adds a no-configuration archive-path scanner to the existing VAB panel.
+// Variable Archive Bridge v0.1.4 helper
+// No-configuration archive-path scanner. Polling only; no MutationObserver.
 
 (function installVabSmartScanner() {
     if (window.__VAB_SMART_SCAN_INSTALLED__) return;
     window.__VAB_SMART_SCAN_INSTALLED__ = true;
 
-    const VERSION = '0.2.0';
+    const VERSION = '0.1.4';
 
     function escapeHtml(s) {
-        return String(s ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+        return String(s ?? '').replace(/[&<>"']/g, c => ({
+            '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+        }[c]));
     }
 
     function byteSize(value) {
@@ -38,8 +40,8 @@
             visited.add(node);
             const entries = Object.entries(node);
             if (segs.length && entries.length >= 2) {
-                const objectish = entries.filter(([, v]) => v && typeof v === 'object').length;
-                const scalarCount = entries.filter(([, v]) => v === null || ['string','number','boolean'].includes(typeof v)).length;
+                const objectish = entries.filter(([, v]) => v && typeof v === 'object' && !Array.isArray(v)).length;
+                const scalarCount = entries.filter(([, v]) => v === null || ['string', 'number', 'boolean'].includes(typeof v)).length;
                 const ratio = objectish / entries.length;
                 const last = segs[segs.length - 1];
                 if (ratio >= 0.65 && scalarCount <= Math.max(1, Math.floor(entries.length * 0.25)) && !skipKeys.has(last)) {
@@ -56,7 +58,7 @@
         }
 
         walk(statData, [], 0);
-        return out.sort((a,b) => b.score - a.score || b.size - a.size).slice(0, 18);
+        return out.sort((a, b) => b.score - a.score || b.size - a.size).slice(0, 18);
     }
 
     function patchPanel() {
@@ -68,8 +70,7 @@
 
         const root = panel.querySelector('#vab-root');
         const addRow = root?.querySelector('.vab-add-row');
-        if (!root || !addRow) return;
-        if (root.querySelector('#vab-smart-scan')) return;
+        if (!root || !addRow || root.querySelector('#vab-smart-scan')) return;
 
         const box = document.createElement('details');
         box.id = 'vab-smart-scan';
@@ -84,6 +85,7 @@
 
         const render = () => {
             const list = box.querySelector('[data-vab-smart-list]');
+            if (!list) return;
             const state = window.VariableArchiveBridge?.getState?.();
             const stat = state?.latestMvu?.statData;
             const candidates = discover(stat);
@@ -113,8 +115,8 @@
         render();
     }
 
-    const observer = new MutationObserver(() => patchPanel());
-    observer.observe(document.documentElement, { childList: true, subtree: true });
-    setInterval(patchPanel, 1500);
+    // Deliberately no MutationObserver. This avoids DOM self-trigger loops.
+    const timer = setInterval(patchPanel, 2500);
+    window.__VAB_SMART_SCAN_TIMER__ = timer;
     patchPanel();
 })();
