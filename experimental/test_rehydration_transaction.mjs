@@ -23,6 +23,7 @@ function set(root, path, value) {
 
 function makeHarness({
   hot = { 阶段: '圆满', 最近使用: '新剧情' },
+  omitHot = false,
   cold = { 类型: '剑法/指法', 品阶: '顶尖', 阶段: '小成', 来源: '陈近南亲传' },
   scopeKey = 'scope-A',
   onSnapshot = null,
@@ -43,7 +44,7 @@ function makeHarness({
     marks: 0,
     rollbacks: 0,
   };
-  if (hot !== undefined) set(box.statData, pointer, hot);
+  if (!omitHot) set(box.statData, pointer, hot);
 
   const io = {
     async refresh() {
@@ -138,7 +139,7 @@ function makeHarness({
 
 // 5. If target is still absent, rehydration does nothing. Plain restore is a different workflow.
 {
-  const { io, box } = makeHarness({ hot: undefined });
+  const { io, box } = makeHarness({ omitHot: true });
   const result = await executeRehydrationTransaction(io, 'arc1');
   assert.equal(result.status, 'noop');
   assert.equal(box.writes, 0);
