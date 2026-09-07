@@ -27,7 +27,7 @@
         box.innerHTML = `
           <summary>🧪 智能托管安全测试入口</summary>
           <div class="vab-note">
-            正常启动不会载入任何实验模块。只有你主动点击“加载候选模块”时，才临时载入智能托管与冷档案召回候选；两者的实际自动开关仍保持关闭。重启酒馆后不会自动再次载入。
+            正常启动不会载入任何实验模块。只有你主动点击“加载候选模块”时，才临时载入智能托管、冷档案召回与重激活合并预览；所有实际自动开关仍保持关闭，重激活模块目前更是纯只读。重启酒馆后不会自动再次载入。
           </div>
           <div class="vab-actions">
             <button class="menu_button" data-vab-safe-load>加载候选模块</button>
@@ -57,6 +57,7 @@
 
             let smart = null;
             let recall = null;
+            let rehydration = null;
             try {
                 smart = await import('./experimental/smart_host_safe.js');
                 if (typeof smart.mountSmartHostSafe !== 'function') {
@@ -70,9 +71,16 @@
                 }
                 recall.mountRecallSafe();
 
-                loadedModules = { smart, recall };
-                statusText = '候选模块已载入；智能托管与实际Prompt召回都仍关闭。可只用“只读检查/预览”。';
+                rehydration = await import('./experimental/rehydration_safe.js');
+                if (typeof rehydration.mountRehydrationSafe !== 'function') {
+                    throw new Error('重激活合并候选缺少 mountRehydrationSafe()');
+                }
+                rehydration.mountRehydrationSafe();
+
+                loadedModules = { smart, recall, rehydration };
+                statusText = '候选模块已载入；智能托管与实际Prompt召回都仍关闭，重激活合并仅提供只读预览。';
             } catch (error) {
+                try { rehydration?.unmountRehydrationSafe?.(); } catch {}
                 try { await recall?.unmountRecallSafe?.(); } catch {}
                 try { smart?.unmountSmartHostSafe?.(); } catch {}
                 loadedModules = null;
@@ -90,6 +98,7 @@
             statusText = '正在卸载候选模块…';
             sync();
             try {
+                loadedModules.rehydration?.unmountRehydrationSafe?.();
                 await loadedModules.recall?.unmountRecallSafe?.();
                 loadedModules.smart?.unmountSmartHostSafe?.();
                 loadedModules = null;
