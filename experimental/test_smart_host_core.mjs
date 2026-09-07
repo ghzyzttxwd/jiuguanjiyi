@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {
+  collectHotAnchorText,
   discoverContainers,
   effectiveMinChildren,
   selectArchiveCandidate,
@@ -16,8 +17,10 @@ function dict(prefix, n, payload = i => ({ level: i % 9, note: `n${i}` })) {
 const stat = {
   玩家: {
     当前状态: { hp: 100, mp: 50 },
+    当前主修: '武学35',
     武学: dict('武学', 35, i => ({ 阶段: i % 3, 熟练: i, 描述: 'x'.repeat(400) })),
   },
+  队伍: { 成员: ['人物40'], 当前目标: '护送人物39' },
   人物: dict('人物', 40, i => ({ 关系: i, 地点: '城', 备注: 'y'.repeat(300) })),
   当前世界: { 名称: '测试', 状态: { 天气: '晴' } },
 };
@@ -32,6 +35,13 @@ assert.equal(isProtectedPath('/当前世界/人物'), true);
 assert.equal(textMentionsKey('我去找人物9', '人物9'), true);
 assert.equal(textMentionsKey('我去找人物9', '人物8'), false);
 
+const hotText = collectHotAnchorText(stat);
+assert(hotText.includes('武学35'));
+assert(hotText.includes('人物40'));
+assert(hotText.includes('人物39'));
+assert(!hotText.includes('人物1'));
+assert(!hotText.includes('武学1'));
+
 let activity = updateActivity({ containers: found, prior: {}, messageCount: 100 });
 const martial = found.find(x => x.path === '/玩家/武学');
 assert.equal(selectArchiveCandidate({ container: martial, activity: activity[martial.path], messageCount: 110, settings: { minIdleMessages: 40, minContainerBytes: 0 } }), null);
@@ -41,7 +51,7 @@ let candidate = selectArchiveCandidate({
   container: martial,
   activity: activity[martial.path],
   messageCount: 100,
-  recentText: '我现在主要使用武学35',
+  recentText: hotText,
   settings: { minIdleMessages: 40, minContainerBytes: 0, minChildren: 30, targetChildren: 20, minMessagesBeforeArchive: 60 },
 });
 assert(candidate);
@@ -116,6 +126,14 @@ let tinyActivity = updateActivity({ containers: [tiny], prior: {}, messageCount:
 for (const key of Object.keys(tinyActivity[tiny.path])) tinyActivity[tiny.path][key].lastTouched = 0;
 assert.equal(selectArchiveCandidate({container: tiny, activity: tinyActivity[tiny.path], messageCount: 200}), null);
 
+const stalePrior = {
+  '/人物': { 人物1: { hash: 'old', lastTouched: 1 } },
+  '/已删除容器': { 旧数据: { hash: 'dead', lastTouched: 1 } },
+};
+const pruned = updateActivity({ containers: found, prior: stalePrior, messageCount: 200 });
+assert(!('/已删除容器' in pruned));
+assert('/人物' in pruned);
+
 const stress = { 人物: dict('角色', 5000, i=>({a:i,b:'z'.repeat(100)})) };
 const t0 = performance.now();
 const stressFound = discoverContainers(stress);
@@ -125,9 +143,10 @@ assert(elapsed < 2000);
 
 console.log(JSON.stringify({
   ok:true,
-  tests:27,
+  tests:34,
   stressMs:Math.round(elapsed),
   discovered:found.map(x=>x.path),
   simulatedCandidate:simSmall?.candidate?.key,
   adaptiveWorldLimit:effectiveMinChildren(worlds),
+  hotAnchors:hotText.split('\n').slice(0,8),
 }));
