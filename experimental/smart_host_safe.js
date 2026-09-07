@@ -1,5 +1,6 @@
 import {
   DEFAULT_SMART_HOST_SETTINGS,
+  collectHotAnchorText,
   discoverContainers,
   getByPointer,
   selectArchiveCandidate,
@@ -8,19 +9,25 @@ import {
   updateActivity,
 } from './smart_host_core.js';
 
-const VERSION = '0.2.0-rc3';
-const SETTINGS_KEY = 'vab.smartHost.safe.settings.v4';
-const ACTIVITY_KEY = 'vab.smartHost.safe.activity.v4';
-const UI_INTERVAL_MS = 2500;
-const CYCLE_INTERVAL_MS = 15000;
+const VERSION = '0.2.0-rc4';
+const SETTINGS_KEY = 'vab.smartHost.safe.settings.v5';
+const ACTIVITY_KEY = 'vab.smartHost.safe.activity.v5';
+const UI_INTERVAL_MS = 4000;
+const TRIGGER_DELAY_MS = 1800;
 const FUTURE_SIM_MESSAGES = 60;
+const ERROR_WINDOW_MS = 10 * 60 * 1000;
+const MAX_ERRORS_IN_WINDOW = 3;
 
 let mounted = false;
-let cycleTimer = null;
 let uiTimer = null;
+let scheduledTimer = null;
 let busy = false;
+let generationActive = false;
 let lastActionAt = 0;
+let lastActionMessageCount = -1;
 let statusText = '未启用';
+let errorTimes = [];
+let eventBindings = [];
 
 const defaults = {
   enabled: false,
@@ -71,52 +78,8 @@ function recentContextText(count = cfg.recentMentionMessages) {
     .join('\n');
 }
 
-function buildHotAnchorText(statData) {
-  if (!statData || typeof statData !== 'object' || Array.isArray(statData)) return '';
-  const hotRootPattern = /(玩家|user|当前|current|任务|task|队伍|小队|同行|同伴|team|party|状态|status)/i;
-  const parts = [];
-  let chars = 0;
-  const cap = 8000;
-
-  function push(value) {
-    if (chars >= cap) return;
-    const text = String(value ?? '').trim();
-    if (!text) return;
-    const clipped = text.slice(0, 300);
-    parts.push(clipped);
-    chars += clipped.length + 1;
-  }
-
-  function walk(value, depth) {
-    if (chars >= cap || depth > 3 || value == null) return;
-    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
-      push(value);
-      return;
-    }
-    if (Array.isArray(value)) {
-      for (const item of value.slice(0, 20)) walk(item, depth + 1);
-      return;
-    }
-    if (typeof value !== 'object') return;
-    for (const [key, child] of Object.entries(value)) {
-      push(key);
-      walk(child, depth + 1);
-      if (chars >= cap) break;
-    }
-  }
-
-  for (const [key, value] of Object.entries(statData)) {
-    if (!hotRootPattern.test(key)) continue;
-    push(key);
-    walk(value, 0);
-    if (chars >= cap) break;
-  }
-
-  return parts.join('\n').slice(0, cap);
-}
-
 function protectionText(statData) {
-  return [recentContextText(), buildHotAnchorText(statData)].filter(Boolean).join('\n');
+  return [recentContextText(), collectHotAnchorText(statData)].filter(Boolean).join('\n');
 }
 
 function messageCount() {
@@ -202,13 +165,14 @@ function buildPreview(state, options = {}) {
 function buildFutureSimulation(state, futureMessages = FUTURE_SIM_MESSAGES) {
   const stat = state?.latestMvu?.statData;
   const scopeKey = state?.current?.scopeKey;
-  if (!stat || !scopeKey) return { action: 'none', reason: '当前没有MVU' };
+  if (!stat || !scopeKey) return { action: 'none', reason: '当前没有MVU', items: [] };
 
   const liveContainers = discoverContainers(stat, cfg);
-  if (!liveContainers.length) return { action: 'none', reason: '当前没有可托管的对象容器' };
+  if (!liveContainers.length) return { action: 'none', reason: '当前没有可托管的对象容器', items: [] };
 
   const nowCount = messageCount();
   const text = protectionText(stat);
+  const items = [];
 
   for (const live of liveContainers) {
     const result = simulateFutureArchiveCandidate({
@@ -218,33 +182,80 @@ function buildFutureSimulation(state, futureMessages = FUTURE_SIM_MESSAGES) {
       settings: cfg,
       futureMessages,
     });
-
-    if (result?.candidate) {
-      return {
-        action: 'archive',
-        container: live,
-        candidate: result.candidate,
-        simulatedCount: result.simulatedMessageCount,
-        virtualCount: result.virtualCount,
-        effectiveMin: result.effectiveMin,
-        reason: `只读模拟：假设 ${live.path} 增长到 ${result.virtualCount} 项，且现有条目再闲置 ${futureMessages} 条消息`,
-      };
-    }
+    if (!result?.candidate) continue;
+    items.push({
+      container: live,
+      candidate: result.candidate,
+      simulatedCount: result.simulatedMessageCount,
+      virtualCount: result.virtualCount,
+      effectiveMin: result.effectiveMin,
+    });
   }
 
+  if (!items.length) {
+    return {
+      action: 'none',
+      reason: `只读模拟完成：即使假设未来再闲置 ${futureMessages} 条消息，也没有安全候选`,
+      items: [],
+    };
+  }
+
+  items.sort((a, b) => b.candidate.size - a.candidate.size || b.container.size - a.container.size);
   return {
-    action: 'none',
-    reason: `只读模拟完成：即使假设未来再闲置 ${futureMessages} 条消息，也没有安全候选`,
+    action: 'archive',
+    reason: `只读模拟：假设现有条目再闲置 ${futureMessages} 条消息，并让各容器增长到触发线`,
+    items,
   };
 }
 
-async function runCycle({ ignoreCooldown = false } = {}) {
+function clearScheduledCycle() {
+  if (scheduledTimer) clearTimeout(scheduledTimer);
+  scheduledTimer = null;
+}
+
+function scheduleCycle(delay = TRIGGER_DELAY_MS) {
+  clearScheduledCycle();
+  if (!mounted || !cfg.enabled || generationActive) return;
+  scheduledTimer = setTimeout(() => {
+    scheduledTimer = null;
+    runCycle().catch(error => console.warn('[VAB SmartHost Safe] scheduled cycle failed', error));
+  }, Math.max(250, Number(delay) || TRIGGER_DELAY_MS));
+}
+
+function recordFailure(error) {
+  const now = Date.now();
+  errorTimes = errorTimes.filter(t => now - t <= ERROR_WINDOW_MS);
+  errorTimes.push(now);
+  if (errorTimes.length >= MAX_ERRORS_IN_WINDOW) {
+    cfg.enabled = false;
+    saveCfg();
+    clearScheduledCycle();
+    statusText = `熔断：10分钟内连续异常 ${errorTimes.length} 次，智能托管已自动关闭。最后异常：${error?.message || error}`;
+    return true;
+  }
+  return false;
+}
+
+async function runCycle({ ignoreCooldown = false, ignorePerMessageGuard = false } = {}) {
   if (busy) return;
   if (!cfg.enabled) {
     statusText = '未启用 · 不执行任何迁移';
     updateUi();
     return;
   }
+  if (generationActive) {
+    statusText = '模型正在生成 · 本轮暂停所有变量迁移';
+    updateUi();
+    return;
+  }
+  if (document.hidden) {
+    statusText = '页面在后台 · 本轮暂停';
+    updateUi();
+    return;
+  }
+
+  const currentMessageCount = messageCount();
+  if (!ignorePerMessageGuard && lastActionMessageCount === currentMessageCount) return;
   if (!ignoreCooldown && Date.now() - lastActionAt < cfg.actionCooldownMs) return;
 
   const vab = getVab();
@@ -256,14 +267,26 @@ async function runCycle({ ignoreCooldown = false } = {}) {
 
   busy = true;
   try {
+    const beforeState = getState();
+    const beforeScope = beforeState?.current?.scopeKey || '';
     await vab.refreshCurrent({ render: false });
     let state = getState();
-    if (!state?.latestMvu?.statData || !state?.current?.scopeKey) {
+    const scopeKey = state?.current?.scopeKey;
+
+    if (!state?.latestMvu?.statData || !scopeKey) {
       statusText = '当前没有MVU';
+      return;
+    }
+    if (beforeScope && beforeScope !== scopeKey) {
+      statusText = '检测到聊天刚切换 · 本轮不修改变量';
       return;
     }
     if (legacyAutoEnabled(state)) {
       statusText = '检测到旧版“自动归档总开关”已开启；为避免双引擎同时改变量，智能托管暂停';
+      return;
+    }
+    if (generationActive) {
+      statusText = '模型开始生成 · 已在写入前取消本轮迁移';
       return;
     }
 
@@ -280,6 +303,8 @@ async function runCycle({ ignoreCooldown = false } = {}) {
       statusText = `恢复：${preview.record.childKey}`;
       await vab.restoreArchive(preview.record.id);
       lastActionAt = Date.now();
+      lastActionMessageCount = messageCount();
+      errorTimes = [];
       statusText = `已恢复：${preview.record.childKey}`;
       return;
     }
@@ -288,10 +313,13 @@ async function runCycle({ ignoreCooldown = false } = {}) {
       statusText = `归档：${preview.candidate.key}`;
       await vab.archiveChild(preview.container.path, preview.candidate.key, { automatic: true });
       lastActionAt = Date.now();
+      lastActionMessageCount = messageCount();
+      errorTimes = [];
       statusText = `已归档：${preview.candidate.key}`;
     }
   } catch (error) {
-    statusText = `异常：${error?.message || error}`;
+    const fused = recordFailure(error);
+    if (!fused) statusText = `异常：${error?.message || error} · 已记录，达到3次会自动熔断`;
     console.warn('[VAB SmartHost Safe]', error);
   } finally {
     busy = false;
@@ -299,15 +327,58 @@ async function runCycle({ ignoreCooldown = false } = {}) {
   }
 }
 
-function startCycleTimer() {
-  stopCycleTimer();
-  if (!cfg.enabled) return;
-  cycleTimer = setInterval(() => runCycle(), CYCLE_INTERVAL_MS);
+function bindHostEvent(eventName, handler) {
+  const c = ctx();
+  const source = c?.eventSource;
+  if (!eventName || !source?.on) return;
+  source.on(eventName, handler);
+  eventBindings.push({ source, eventName, handler });
 }
 
-function stopCycleTimer() {
-  if (cycleTimer) clearInterval(cycleTimer);
-  cycleTimer = null;
+function hookHostEvents() {
+  if (eventBindings.length) return;
+  const c = ctx();
+  const events = c?.event_types || {};
+
+  const onGenerationStarted = () => {
+    generationActive = true;
+    clearScheduledCycle();
+    if (cfg.enabled) statusText = '模型正在生成 · 自动托管暂停';
+    updateUi();
+  };
+  const onGenerationFinished = () => {
+    generationActive = false;
+    if (cfg.enabled) {
+      statusText = '生成结束 · 等待安全检查';
+      scheduleCycle(TRIGGER_DELAY_MS);
+    }
+    updateUi();
+  };
+  const onStableMessage = () => {
+    if (cfg.enabled && !generationActive) scheduleCycle(TRIGGER_DELAY_MS);
+  };
+  const onChatChanged = () => {
+    clearScheduledCycle();
+    lastActionMessageCount = -1;
+    if (cfg.enabled) statusText = '聊天已切换 · 等待下一次生成完成后再检查';
+    updateUi();
+  };
+
+  bindHostEvent(events.GENERATION_STARTED, onGenerationStarted);
+  bindHostEvent(events.GENERATION_STOPPED, onGenerationFinished);
+  bindHostEvent(events.GENERATION_ENDED, onGenerationFinished);
+  bindHostEvent(events.CHARACTER_MESSAGE_RENDERED, onStableMessage);
+  bindHostEvent(events.MESSAGE_RECEIVED, onStableMessage);
+  bindHostEvent(events.MESSAGE_UPDATED, onStableMessage);
+  bindHostEvent(events.CHAT_CHANGED, onChatChanged);
+}
+
+function unhookHostEvents() {
+  for (const { source, eventName, handler } of eventBindings) {
+    try { source?.removeListener?.(eventName, handler); } catch {}
+  }
+  eventBindings = [];
+  generationActive = false;
 }
 
 function setEnabled(value) {
@@ -315,14 +386,16 @@ function setEnabled(value) {
     cfg.enabled = false;
     statusText = '无法开启：旧版“自动归档总开关”仍开启，请只保留一个自动引擎';
     saveCfg();
-    stopCycleTimer();
+    clearScheduledCycle();
     updateUi();
     return;
   }
   cfg.enabled = !!value;
   saveCfg();
-  statusText = cfg.enabled ? '已开启，等待安全阈值' : '未启用';
-  startCycleTimer();
+  clearScheduledCycle();
+  statusText = cfg.enabled
+    ? '已开启 · 事件驱动模式；只在生成结束/稳定消息后检查，不做15秒轮询'
+    : '未启用';
   updateUi();
 }
 
@@ -340,7 +413,7 @@ function ensureUi() {
   box.open = true;
   box.innerHTML = `
     <summary>🧠 智能托管候选版 ${VERSION}</summary>
-    <div class="vab-note">安全版：没有 MutationObserver；每次手动载入都强制从“关闭”开始。不开总开关时，执行按钮也不能迁移数据。</div>
+    <div class="vab-note">RC4：没有 MutationObserver；不再每15秒扫描归档。自动模式改为事件驱动，只在模型生成结束或稳定消息事件后延迟检查。每次手动载入仍强制从“关闭”开始。</div>
     <label class="checkbox_label"><input type="checkbox" data-vab-safe-enabled> 智能托管</label>
     <label class="checkbox_label"><input type="checkbox" data-vab-safe-restore> 提到冷档案时自动恢复</label>
     <div class="vab-actions">
@@ -348,7 +421,7 @@ function ensureUi() {
       <button class="menu_button" data-vab-safe-simulate>模拟未来闲置60条</button>
       <button class="menu_button" data-vab-safe-run>执行一次（需先开启）</button>
     </div>
-    <div class="vab-note">模拟功能只使用内存副本。正式候选还会保护最近8条双方消息，以及玩家/当前状态/任务/队伍等热状态里引用到的对象。</div>
+    <div class="vab-note">额外保险：生成期间绝不迁移；同一聊天楼数最多自动改1项；30秒动作冷却；10分钟内3次异常自动熔断关闭；最近8条双方消息与当前任务/队伍/正在使用对象会被保护。</div>
     <div class="vab-note" data-vab-safe-status></div>
     <details>
       <summary>高级阈值</summary>
@@ -374,7 +447,7 @@ function ensureUi() {
       const state = getState();
       refreshActivity(state);
       const preview = buildPreview(state);
-      if (preview.action === 'archive') statusText = `只读候选：归档 ${preview.candidate.key} · ${preview.reason}`;
+      if (preview.action === 'archive') statusText = `只读候选：归档 ${preview.candidate.key} · ${preview.reason} · 动态热区阈值${preview.candidate.effectiveMin ?? '—'}`;
       else if (preview.action === 'restore') statusText = `只读候选：恢复 ${preview.record.childKey} · ${preview.reason}`;
       else statusText = `只读结果：${preview.reason}`;
     } catch (error) {
@@ -387,7 +460,10 @@ function ensureUi() {
       await getVab()?.refreshCurrent?.({ render: false });
       const simulation = buildFutureSimulation(getState(), FUTURE_SIM_MESSAGES);
       if (simulation.action === 'archive') {
-        statusText = `模拟候选：${simulation.container.path}/${simulation.candidate.key} · ${simulation.reason} · 动态热区阈值${simulation.effectiveMin} · 未修改真实数据`;
+        const top = simulation.items.slice(0, 3).map(item =>
+          `${item.container.path}/${item.candidate.key}（热区阈值${item.effectiveMin}，候选${Math.max(1, Math.round(item.candidate.size / 1024))}KB）`
+        ).join('；');
+        statusText = `模拟候选：${top} · ${simulation.reason} · 未修改真实数据`;
       } else {
         statusText = `模拟结果：${simulation.reason} · 未修改真实数据`;
       }
@@ -396,7 +472,7 @@ function ensureUi() {
     }
     updateUi();
   });
-  box.querySelector('[data-vab-safe-run]')?.addEventListener('click', () => runCycle({ ignoreCooldown: true }));
+  box.querySelector('[data-vab-safe-run]')?.addEventListener('click', () => runCycle({ ignoreCooldown: true, ignorePerMessageGuard: true }));
 
   const bindNum = (selector, key, transform) => {
     box.querySelector(selector)?.addEventListener('change', e => {
@@ -441,7 +517,7 @@ function updateUi() {
   setText('[data-vab-safe-status]', `${cfg.enabled ? '●' : '○'} ${statusText}`);
 
   const runButton = box.querySelector('[data-vab-safe-run]');
-  if (runButton) runButton.disabled = !cfg.enabled || busy;
+  if (runButton) runButton.disabled = !cfg.enabled || busy || generationActive;
 }
 
 export function mountSmartHostSafe() {
@@ -449,17 +525,19 @@ export function mountSmartHostSafe() {
   mounted = true;
   cfg.enabled = false;
   saveCfg();
-  statusText = '未启用 · 候选模块已安全载入';
+  statusText = '未启用 · 候选模块已安全载入（事件驱动RC4）';
+  hookHostEvents();
   ensureUi();
   uiTimer = setInterval(ensureUi, UI_INTERVAL_MS);
-  startCycleTimer();
 }
 
 export function unmountSmartHostSafe() {
-  setEnabled(false);
-  stopCycleTimer();
+  cfg.enabled = false;
+  saveCfg();
+  clearScheduledCycle();
   if (uiTimer) clearInterval(uiTimer);
   uiTimer = null;
+  unhookHostEvents();
   document.querySelector('#vab-smart-host-safe')?.remove();
   mounted = false;
 }
@@ -468,7 +546,16 @@ export const SmartHostSafeDiagnostics = {
   VERSION,
   getSettings: () => clone(cfg),
   getStatus: () => statusText,
+  getRuntime: () => ({
+    mounted,
+    busy,
+    generationActive,
+    eventBindings: eventBindings.length,
+    scheduled: !!scheduledTimer,
+    lastActionMessageCount,
+    recentErrors: errorTimes.length,
+  }),
   preview: () => buildPreview(getState()),
   simulateFuture: (futureMessages = FUTURE_SIM_MESSAGES) => buildFutureSimulation(getState(), futureMessages),
-  runOnce: () => runCycle({ ignoreCooldown: true }),
+  runOnce: () => runCycle({ ignoreCooldown: true, ignorePerMessageGuard: true }),
 };
