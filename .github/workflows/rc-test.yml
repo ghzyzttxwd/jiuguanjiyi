@@ -23,10 +23,13 @@ jobs:
         run: printf '{"type":"module"}\n' > package.json
       - name: Core logic tests
         run: node experimental/test_smart_host_core.mjs
+      - name: Long-session stress simulation
+        run: node experimental/test_smart_host_stress.mjs
       - name: Syntax checks
         run: |
           node --check experimental/smart_host_core.js
           node --check experimental/smart_host_safe.js
+          node --check experimental/test_smart_host_stress.mjs
           node --check safe_loader.js
           node --check smart_scan.js
           node --check bootstrap.js
