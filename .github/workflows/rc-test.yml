@@ -39,5 +39,16 @@ jobs:
           fi
           grep -q "enabled = false" experimental/smart_host_safe.js
           grep -q "if (!cfg.enabled)" experimental/smart_host_safe.js
+          grep -q "generationActive" experimental/smart_host_safe.js
+          grep -q "removeListener" experimental/smart_host_safe.js
+          grep -q "MAX_ERRORS_IN_WINDOW" experimental/smart_host_safe.js
+          if grep -q "CYCLE_INTERVAL_MS" experimental/smart_host_safe.js; then
+            echo 'Periodic archive cycle reintroduced; RC4 must remain event-driven.'
+            exit 1
+          fi
+          if grep -Eq "setInterval\([^\n]*runCycle" experimental/smart_host_safe.js; then
+            echo 'Periodic runCycle polling detected; forbidden in candidate.'
+            exit 1
+          fi
           grep -q "import('./experimental/smart_host_safe.js')" safe_loader.js
           ! grep -q "import './experimental/smart_host_safe.js'" bootstrap.js
