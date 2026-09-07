@@ -149,3 +149,60 @@ export function updateActivity({ containers, prior = {}, messageCount = 0 }) {
   }
   return next;
 }
+
+export function simulateFutureArchiveCandidate({
+  container,
+  messageCount = 0,
+  recentText = '',
+  settings = {},
+  futureMessages = 60,
+}) {
+  const cfg = { ...DEFAULT_SMART_HOST_SETTINGS, ...settings };
+  if (!container?.entries?.length) return null;
+
+  const simulatedCount = Math.max(
+    cfg.minMessagesBeforeArchive + 1,
+    Number(messageCount || 0) + Math.max(1, Number(futureMessages || 0)),
+  );
+
+  const realKeys = new Set(container.entries.map(([key]) => key));
+  const virtualEntries = container.entries.map(([key, value]) => [key, value]);
+  const neededCount = Math.max(cfg.minChildren + 1, cfg.targetChildren + 1, virtualEntries.length);
+
+  for (let i = virtualEntries.length; i < neededCount; i++) {
+    virtualEntries.push([
+      `__模拟新增_${i + 1}`,
+      { simulationOnly: true },
+    ]);
+  }
+
+  const virtualContainer = {
+    ...container,
+    entries: virtualEntries,
+    count: virtualEntries.length,
+    size: Math.max(container.size || 0, cfg.minContainerBytes + 1),
+  };
+
+  const virtualActivity = {};
+  for (const [key] of virtualEntries) {
+    virtualActivity[key] = {
+      hash: 'simulation',
+      lastTouched: realKeys.has(key) ? Number(messageCount || 0) : simulatedCount,
+    };
+  }
+
+  const candidate = selectArchiveCandidate({
+    container: virtualContainer,
+    activity: virtualActivity,
+    messageCount: simulatedCount,
+    recentText,
+    settings: cfg,
+  });
+
+  if (!candidate || !realKeys.has(candidate.key)) return null;
+  return {
+    candidate,
+    virtualCount: virtualContainer.count,
+    simulatedMessageCount: simulatedCount,
+  };
+}
