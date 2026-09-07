@@ -1,11 +1,11 @@
-// Variable Archive Bridge v0.1.3 helper
+// Variable Archive Bridge v0.2.0 helper
 // Adds a no-configuration archive-path scanner to the existing VAB panel.
 
 (function installVabSmartScanner() {
     if (window.__VAB_SMART_SCAN_INSTALLED__) return;
     window.__VAB_SMART_SCAN_INSTALLED__ = true;
 
-    const VERSION = '0.1.3';
+    const VERSION = '0.2.0';
 
     function escapeHtml(s) {
         return String(s ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
