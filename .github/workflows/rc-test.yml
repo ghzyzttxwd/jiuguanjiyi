@@ -29,6 +29,8 @@ jobs:
         run: node experimental/test_recall_delivery_core.mjs
       - name: Rehydration planning tests
         run: node experimental/test_rehydration_core.mjs
+      - name: Rehydration transaction tests
+        run: node experimental/test_rehydration_transaction.mjs
       - name: End-to-end cold memory lifecycle
         run: node experimental/test_memory_pipeline_e2e.mjs
       - name: Long-session stress simulation
@@ -41,11 +43,13 @@ jobs:
           node --check experimental/recall_delivery_core.js
           node --check experimental/recall_safe.js
           node --check experimental/rehydration_core.js
+          node --check experimental/rehydration_transaction.js
           node --check experimental/rehydration_safe.js
           node --check experimental/test_smart_host_stress.mjs
           node --check experimental/test_recall_core.mjs
           node --check experimental/test_recall_delivery_core.mjs
           node --check experimental/test_rehydration_core.mjs
+          node --check experimental/test_rehydration_transaction.mjs
           node --check experimental/test_memory_pipeline_e2e.mjs
           node --check safe_loader.js
           node --check smart_scan.js
@@ -86,17 +90,21 @@ jobs:
           ! grep -q "archiveChild" experimental/recall_safe.js
           ! grep -q "restoreArchive" experimental/recall_safe.js
 
-          # Rehydration core/UI are planning-only. They may compute merges but must have no storage/MVU write path.
+          # Rehydration core/UI stay read-only; the transaction engine is dependency-injected and has no direct browser/storage/MVU APIs.
           grep -q "merge-hot-over-cold" experimental/rehydration_core.js
           grep -q "只读" experimental/rehydration_safe.js
+          grep -q "rollbackSafely" experimental/rehydration_transaction.js
+          grep -q "scope-changed" experimental/rehydration_transaction.js
+          grep -q "verify-failed" experimental/rehydration_transaction.js
           ! grep -q "replaceMvuData" experimental/rehydration_core.js
-          ! grep -q "archiveChild" experimental/rehydration_core.js
-          ! grep -q "restoreArchive" experimental/rehydration_core.js
           ! grep -q "indexedDB" experimental/rehydration_core.js
           ! grep -q "replaceMvuData" experimental/rehydration_safe.js
           ! grep -q "archiveChild" experimental/rehydration_safe.js
           ! grep -q "restoreArchive" experimental/rehydration_safe.js
           ! grep -q "indexedDB" experimental/rehydration_safe.js
+          ! grep -q "replaceMvuData" experimental/rehydration_transaction.js
+          ! grep -q "indexedDB" experimental/rehydration_transaction.js
+          ! grep -q "window.Mvu" experimental/rehydration_transaction.js
 
           # Production startup remains inert. Candidate code may only be dynamically imported by the explicit safety gate.
           grep -q "import('./experimental/smart_host_safe.js')" safe_loader.js
