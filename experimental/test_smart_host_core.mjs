@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {
   discoverContainers,
+  effectiveMinChildren,
   selectArchiveCandidate,
   simulateFutureArchiveCandidate,
   updateActivity,
@@ -57,7 +58,8 @@ assert.equal(candidate, null);
 const small = { 玩家: { 武学: dict('武学', 8) } };
 const smallFound = discoverContainers(small);
 const smallMartial = smallFound.find(x=>x.path === '/玩家/武学');
-if (smallMartial) {
+assert(smallMartial);
+{
   const a = updateActivity({containers: smallFound, prior:{}, messageCount:100});
   for (const k of Object.keys(a[smallMartial.path])) a[smallMartial.path][k].lastTouched = 0;
   assert.equal(selectArchiveCandidate({container:smallMartial, activity:a[smallMartial.path], messageCount:200}), null);
@@ -83,6 +85,37 @@ const simTooSoon = simulateFutureArchiveCandidate({
 });
 assert.equal(simTooSoon, null);
 
+const hugeRecords = {
+  世界档案: dict('世界', 7, i => ({
+    名称: `世界${i+1}`,
+    历史: 'z'.repeat(9 * 1024),
+    结局: '已结束',
+  })),
+};
+const hugeFound = discoverContainers(hugeRecords);
+const worlds = hugeFound.find(x => x.path === '/世界档案');
+assert(worlds);
+assert.equal(effectiveMinChildren(worlds), 5);
+let worldActivity = updateActivity({ containers: [worlds], prior: {}, messageCount: 100 });
+for (const key of Object.keys(worldActivity[worlds.path])) worldActivity[worlds.path][key].lastTouched = 0;
+const worldCandidate = selectArchiveCandidate({
+  container: worlds,
+  activity: worldActivity[worlds.path],
+  messageCount: 100,
+  recentText: '世界7刚刚回归主线',
+});
+assert(worldCandidate);
+assert.notEqual(worldCandidate.key, '世界7');
+
+const tinyRecords = { 物品: dict('物品', 7, i => ({ 名称: `物品${i+1}`, 数量: 1 })) };
+const tinyFound = discoverContainers(tinyRecords);
+const tiny = tinyFound.find(x => x.path === '/物品');
+assert(tiny);
+assert.equal(effectiveMinChildren(tiny), 30);
+let tinyActivity = updateActivity({ containers: [tiny], prior: {}, messageCount: 100 });
+for (const key of Object.keys(tinyActivity[tiny.path])) tinyActivity[tiny.path][key].lastTouched = 0;
+assert.equal(selectArchiveCandidate({container: tiny, activity: tinyActivity[tiny.path], messageCount: 200}), null);
+
 const stress = { 人物: dict('角色', 5000, i=>({a:i,b:'z'.repeat(100)})) };
 const t0 = performance.now();
 const stressFound = discoverContainers(stress);
@@ -90,4 +123,11 @@ const elapsed = performance.now() - t0;
 assert(stressFound.some(x=>x.path === '/人物'));
 assert(elapsed < 2000);
 
-console.log(JSON.stringify({ok:true, tests:19, stressMs:Math.round(elapsed), discovered:found.map(x=>x.path), simulatedCandidate:simSmall?.candidate?.key}));
+console.log(JSON.stringify({
+  ok:true,
+  tests:27,
+  stressMs:Math.round(elapsed),
+  discovered:found.map(x=>x.path),
+  simulatedCandidate:simSmall?.candidate?.key,
+  adaptiveWorldLimit:effectiveMinChildren(worlds),
+}));
