@@ -1,0 +1,43 @@
+name: Variable Archive Bridge RC Tests
+
+on:
+  push:
+    paths:
+      - 'experimental/**'
+      - 'safe_loader.js'
+      - 'smart_scan.js'
+      - 'bootstrap.js'
+      - '.github/workflows/rc-test.yml'
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Treat JS as ES modules for tests
+        run: printf '{"type":"module"}\n' > package.json
+      - name: Core logic tests
+        run: node experimental/test_smart_host_core.mjs
+      - name: Syntax checks
+        run: |
+          node --check experimental/smart_host_core.js
+          node --check experimental/smart_host_safe.js
+          node --check safe_loader.js
+          node --check smart_scan.js
+          node --check bootstrap.js
+      - name: Safety invariants
+        shell: bash
+        run: |
+          if grep -R "new MutationObserver" bootstrap.js smart_scan.js safe_loader.js experimental/smart_host_safe.js; then
+            echo 'Forbidden MutationObserver found in active or candidate UI code.'
+            exit 1
+          fi
+          grep -q "enabled = false" experimental/smart_host_safe.js
+          grep -q "if (!cfg.enabled)" experimental/smart_host_safe.js
+          grep -q "import('./experimental/smart_host_safe.js')" safe_loader.js
+          ! grep -q "import './experimental/smart_host_safe.js'" bootstrap.js
