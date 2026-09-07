@@ -27,6 +27,8 @@ jobs:
         run: node experimental/test_recall_core.mjs
       - name: Recall delivery conflict tests
         run: node experimental/test_recall_delivery_core.mjs
+      - name: Rehydration planning tests
+        run: node experimental/test_rehydration_core.mjs
       - name: Long-session stress simulation
         run: node experimental/test_smart_host_stress.mjs
       - name: Syntax checks
@@ -36,9 +38,11 @@ jobs:
           node --check experimental/recall_core.js
           node --check experimental/recall_delivery_core.js
           node --check experimental/recall_safe.js
+          node --check experimental/rehydration_core.js
           node --check experimental/test_smart_host_stress.mjs
           node --check experimental/test_recall_core.mjs
           node --check experimental/test_recall_delivery_core.mjs
+          node --check experimental/test_rehydration_core.mjs
           node --check safe_loader.js
           node --check smart_scan.js
           node --check bootstrap.js
@@ -78,7 +82,15 @@ jobs:
           ! grep -q "archiveChild" experimental/recall_safe.js
           ! grep -q "restoreArchive" experimental/recall_safe.js
 
+          # Rehydration core is planning-only. It may compute merges but must have no storage/MVU write path.
+          grep -q "merge-hot-over-cold" experimental/rehydration_core.js
+          ! grep -q "replaceMvuData" experimental/rehydration_core.js
+          ! grep -q "archiveChild" experimental/rehydration_core.js
+          ! grep -q "restoreArchive" experimental/rehydration_core.js
+          ! grep -q "indexedDB" experimental/rehydration_core.js
+
           # Production startup remains inert. Candidate code may only be dynamically imported by the explicit safety gate.
           grep -q "import('./experimental/smart_host_safe.js')" safe_loader.js
+          grep -q "import('./experimental/recall_safe.js')" safe_loader.js
           ! grep -q "import './experimental/smart_host_safe.js'" bootstrap.js
           ! grep -q "recall_safe" bootstrap.js
