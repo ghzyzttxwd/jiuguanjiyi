@@ -95,6 +95,13 @@ jobs:
           if (genericReport.policySource !== 'generic-auto') throw new Error('generic card must use generic discovery');
           if (!genericReport.collections.some(x => x.path === '/技能库')) throw new Error('generic report missing discovered collection');
 
+          // New-card regression: semantic dynamic containers must be visible before they grow large.
+          const youngCard = { 玩家:{ 武学:{ 凝血神剑:{境界:'小成'}, 凌波微步:{境界:'入门'} }, 姓名:'甲' }, 世界:{当前地点:'渝州'} };
+          const youngReport = analyzeHotState(youngCard);
+          const martial = youngReport.collections.find(x => x.path === '/玩家/武学');
+          if (!martial || martial.count !== 2 || martial.level !== 'ok') throw new Error('small semantic collection discovery failed');
+          if (youngReport.collections.some(x => x.path === '/玩家')) throw new Error('fixed parent object must not be misclassified');
+
           const cardPolicy = { id:'custom-card', label:'卡内策略', collectionPolicies:[{path:'/技能库',label:'技能',softLimit:5,hardLimit:10,strategy:'test'}], historyPolicies:[] };
           const resolved = resolvePolicy(generic, cardPolicy);
           if (resolved.source !== 'card' || resolved.id !== 'custom-card') throw new Error('card-provided policy must win');
@@ -123,11 +130,12 @@ jobs:
           grep -q "import './hot_state_governor.js'" bootstrap.js
           grep -q "import './self_update.js'" bootstrap.js
           ! grep -q "lifecycle_watchdog.js" bootstrap.js
-          grep -q '"version": "0.3.3"' manifest.json
+          grep -q '"version": "0.3.4"' manifest.json
           grep -q '"auto_update": true' manifest.json
           grep -q "#vab-governor-settings .inline-drawer-toggle" bootstrap.js
           grep -q "VariableArchiveBridgeHotStateGovernor?.refresh" bootstrap.js
-          grep -q "const VERSION = '0.3.2'" hot_state_governor.js
+          grep -q "const VERSION = '0.3.4'" hot_state_governor.js
+          grep -q "const CURRENT_VERSION = '0.3.4'" self_update.js
           ! grep -q "toggle?.addEventListener('click'" hot_state_governor.js
           grep -q "selectHotArchiveMatches" hot_archive_reconcile.js
           grep -q "core-hot-presence-reconcile" hot_archive_reconcile.js
@@ -142,6 +150,7 @@ jobs:
           grep -q "discoverGenericPolicy" hot_state_governor_core.js
           grep -q "externalPolicy" hot_state_governor_core.js
           grep -q "policySource" hot_state_governor_core.js
+          grep -q "DYNAMIC_LABEL_RE" hot_state_governor_core.js
           grep -q "universal: true" hot_state_governor.js
           grep -q "REMOTE_MANIFEST" self_update.js
           grep -q "'/api/extensions/update'" self_update.js
