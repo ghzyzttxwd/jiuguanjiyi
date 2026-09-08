@@ -1,11 +1,12 @@
-// Variable Archive Bridge v0.3.2 bootstrap
-// Universal MVU archive + recall + read-only hot-state governance for variable cards.
+// Variable Archive Bridge v0.3.3 bootstrap
+// Universal MVU archive + recall + read-only hot-state governance + self-update for variable cards.
 
 import './index.js';
 import './hot_archive_reconcile.js';
 import './smart_scan.js';
 import './production_auto.js';
 import './hot_state_governor.js';
+import './self_update.js';
 
 (function installVabDrawerFix() {
     if (window.__VAB_DRAWER_FIX_INSTALLED__) return;
