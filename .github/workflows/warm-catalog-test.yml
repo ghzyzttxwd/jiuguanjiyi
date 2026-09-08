@@ -1,0 +1,66 @@
+name: VAB Warm Catalog Tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'warm_catalog.js'
+      - 'warm_catalog_core.js'
+      - 'bootstrap.js'
+      - 'manifest.json'
+      - '.github/workflows/warm-catalog-test.yml'
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Treat JS as ES modules
+        run: printf '{"type":"module"}\n' > package.json
+      - name: Syntax
+        run: |
+          node --check warm_catalog.js
+          node --check warm_catalog_core.js
+          node --check bootstrap.js
+      - name: Catalog merge and directory behavior
+        run: |
+          node --input-type=module <<'JS'
+          import { buildCatalogEntries, buildDirectoryContext } from './warm_catalog_core.js';
+          const statData = { 玩家:{ 武学:{ 凝血神剑:{境界:'小成'}, 凌波微步:{境界:'入门'} } } };
+          const report = { collections:[{ path:'/玩家/武学', label:'武学' }] };
+          const preview = { collections:[{ path:'/玩家/武学', cooling:[] }] };
+          const archives = [
+            { id:'arc_1', status:'archived', sourcePath:'/玩家/武学', childKey:'紫霞神功', summary:'紫霞神功｜境界:大成', size:333 },
+            { id:'arc_old', status:'archived', sourcePath:'/玩家/武学', childKey:'凝血神剑', summary:'旧凝血神剑', size:999 },
+          ];
+          const entries = buildCatalogEntries({ statData, report, preview, archives, scopeKey:'scope1', scopeLabel:'测试' });
+          if (entries.length !== 3) throw new Error(`expected 3 catalog entries, got ${entries.length}`);
+          const hot = entries.find(x => x.childKey === '凝血神剑');
+          const cold = entries.find(x => x.childKey === '紫霞神功');
+          if (!hot || hot.temperature !== 'hot' || hot.archiveId) throw new Error('hot MVU must override stale cold archive');
+          if (!cold || cold.temperature !== 'cold' || cold.archiveId !== 'arc_1') throw new Error('cold archive catalog missing');
+          const ctx = buildDirectoryContext(entries, '我会哪些武学？');
+          if (!ctx.includes('凝血神剑') || !ctx.includes('凌波微步') || !ctx.includes('紫霞神功[冷]')) throw new Error('directory context incomplete');
+          if (buildDirectoryContext(entries, '今天天气怎么样') !== '') throw new Error('non-directory query should stay silent');
+          console.log('warm catalog behavior ok');
+          JS
+      - name: Safety invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q '"version": "0.5.0"' manifest.json
+          grep -q "import './warm_catalog.js'" bootstrap.js
+          grep -q "recordType: 'warm-catalog'" warm_catalog_core.js
+          grep -q "temperature: 'hot'" warm_catalog_core.js
+          grep -q "temperature: 'cold'" warm_catalog_core.js
+          grep -q "varArchiveCatalog" warm_catalog.js
+          grep -q "buildDirectoryContext" warm_catalog.js
+          grep -q "status === 'archived'" warm_catalog.js
+          grep -q "core has initialized its schema" warm_catalog.js
+          ! grep -q "replaceMvuData\|archiveChild\|restoreArchive" warm_catalog.js warm_catalog_core.js
+          ! grep -q "new MutationObserver" warm_catalog.js warm_catalog_core.js
