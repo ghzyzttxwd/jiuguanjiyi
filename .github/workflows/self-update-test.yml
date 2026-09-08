@@ -31,9 +31,9 @@ jobs:
         run: |
           node --input-type=module <<'JS'
           import { compareVersions, hasNewerVersion, chooseUpdatePath } from './self_update_core.js';
-          if (compareVersions('0.3.3','0.3.2') !== 1) throw new Error('version compare failed');
-          if (!hasNewerVersion('0.3.2','0.3.3')) throw new Error('newer version detection failed');
-          if (hasNewerVersion('0.3.3','0.3.3')) throw new Error('equal version must not update');
+          if (compareVersions('0.3.5','0.3.4') !== 1) throw new Error('version compare failed');
+          if (!hasNewerVersion('0.3.4','0.3.5')) throw new Error('newer version detection failed');
+          if (hasNewerVersion('0.3.5','0.3.5')) throw new Error('equal version must not update');
           if (chooseUpdatePath({remoteNewer:true, updateOk:true, backendIsUpToDate:false, isAndroid:true}) !== 'reload') throw new Error('normal update path failed');
           if (chooseUpdatePath({remoteNewer:true, updateOk:true, backendIsUpToDate:true, isAndroid:true}) !== 'force-switch') throw new Error('Android false-up-to-date fallback failed');
           if (chooseUpdatePath({remoteNewer:true, updateOk:false, backendIsUpToDate:null, isAndroid:true}) !== 'force-switch') throw new Error('Android update failure fallback failed');
@@ -43,13 +43,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          grep -q '"version": "0.3.3"' manifest.json
+          grep -q '"version": "0.3.5"' manifest.json
           grep -q "import './self_update.js'" bootstrap.js
+          grep -q "VariableArchiveBridgeSelfUpdate?.check" bootstrap.js
+          grep -q "const CURRENT_VERSION = '0.3.5'" self_update.js
+          grep -q "const UPDATE_CHECK_MS = 60 \* 1000" self_update.js
+          grep -q "visibilitychange" self_update.js
+          grep -q "addEventListener('focus'" self_update.js
           grep -q "REMOTE_MANIFEST" self_update.js
           grep -q "'/api/extensions/update'" self_update.js
           grep -q "'/api/extensions/switch'" self_update.js
           grep -q "branch: 'main'" self_update.js
-          grep -q "textContent = '更新'" self_update.js
+          grep -q "btn.textContent = '更新'" self_update.js
           ! grep -q "new MutationObserver" self_update.js
           ! grep -q "'/api/extensions/delete'" self_update.js
           ! grep -q "'/api/extensions/install'" self_update.js
