@@ -1,17 +1,22 @@
-// Variable Archive Bridge v0.3.5 Hot State Governor — universal analysis-only phase.
-// Reads current MVU and reports growth pressure. It never writes MVU, archives, or prompts.
-// Card-specific policies are optional adapters; cards without one use conservative generic discovery.
+// Variable Archive Bridge v0.4.0 Hot State Governor — universal cooling-preview phase.
+// Reads current MVU, scores heat, and previews a warm index/cooling plan.
+// It NEVER writes MVU or archives in this phase.
 
 import { analyzeHotState } from './hot_state_governor_core.js';
+import { buildCoolingPreview } from './hot_state_preview_core.js';
 
-const VERSION = '0.3.5';
+const VERSION = '0.4.0';
 const PANEL_ID = 'vab-governor-settings';
+const HEAT_TOUCH_KEY = 'vab.heat.touches.v1';
 let lastReport = null;
+let lastPreview = null;
 let lastError = '';
 let running = false;
 const sectionState = {
   collectionsOpen: false,
   historiesOpen: false,
+  coolingOpen: false,
+  catalogOpen: false,
 };
 
 function vab() {
@@ -70,6 +75,89 @@ function hostNode() {
   return document.querySelector('#extensions_settings2') || document.querySelector('#extensions_settings') || document.body;
 }
 
+function recentConversationText() {
+  try {
+    const chat = ctx()?.chat || [];
+    return chat.slice(-6).map(m => String(m?.mes || '')).join('\n').toLowerCase();
+  } catch {
+    return '';
+  }
+}
+
+function messageCount() {
+  try { return ctx()?.chat?.length || 0; }
+  catch { return 0; }
+}
+
+function fnv1a(input) {
+  const s = String(input ?? '');
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(16);
+}
+
+function nodeHash(value) {
+  try {
+    const json = JSON.stringify(value);
+    return `${json.length}:${fnv1a(json)}`;
+  } catch {
+    return String(Date.now());
+  }
+}
+
+function loadHeatTouches() {
+  try { return JSON.parse(localStorage.getItem(HEAT_TOUCH_KEY) || '{}'); }
+  catch { return {}; }
+}
+
+function saveHeatTouches(all) {
+  try { localStorage.setItem(HEAT_TOUCH_KEY, JSON.stringify(all)); }
+  catch { /* best effort only */ }
+}
+
+function getByPointer(root, path) {
+  if (!root || typeof path !== 'string' || !path.startsWith('/')) return undefined;
+  const keys = path.slice(1).split('/').map(x => x.replace(/~1/g, '/').replace(/~0/g, '~'));
+  let cur = root;
+  for (const key of keys) {
+    if (cur == null || typeof cur !== 'object' || !(key in cur)) return undefined;
+    cur = cur[key];
+  }
+  return cur;
+}
+
+function observeHeatTouches(statData, report, scopeKey, msgCount) {
+  if (!scopeKey) return {};
+  const all = loadHeatTouches();
+  const scope = all[scopeKey] ||= {};
+  for (const row of report?.collections || []) {
+    const container = getByPointer(statData, row.path);
+    if (!container || typeof container !== 'object') continue;
+    const pathState = scope[row.path] ||= {};
+    const entries = Array.isArray(container) ? container.map((v, i) => [String(i), v]) : Object.entries(container);
+    const liveKeys = new Set();
+    for (const [key, node] of entries) {
+      liveKeys.add(key);
+      const hash = nodeHash(node);
+      const old = pathState[key];
+      if (!old) pathState[key] = { hash, lastChanged: msgCount, lastSeen: msgCount };
+      else {
+        if (old.hash !== hash) {
+          old.hash = hash;
+          old.lastChanged = msgCount;
+        }
+        old.lastSeen = msgCount;
+      }
+    }
+    for (const key of Object.keys(pathState)) if (!liveKeys.has(key)) delete pathState[key];
+  }
+  saveHeatTouches(all);
+  return scope;
+}
+
 function ensurePanel() {
   if (document.getElementById(PANEL_ID)) return true;
   const host = hostNode();
@@ -79,7 +167,7 @@ function ensurePanel() {
   wrap.innerHTML = `
     <div class="inline-drawer vab-governor-drawer">
       <div class="inline-drawer-toggle inline-drawer-header vab-governor-header">
-        <b>🧠 热变量治理 <small>v${VERSION} · 通用只分析</small></b>
+        <b>🧠 热变量治理 <small>v${VERSION} · 降温预览</small></b>
         <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
       </div>
       <div class="inline-drawer-content vab-governor-content" style="display:none">
@@ -93,21 +181,51 @@ function ensurePanel() {
 }
 
 function rememberSectionState(root) {
-  const collections = root?.querySelector('[data-vab-section="collections"]');
-  const histories = root?.querySelector('[data-vab-section="histories"]');
-  if (collections) sectionState.collectionsOpen = !!collections.open;
-  if (histories) sectionState.historiesOpen = !!histories.open;
+  for (const key of Object.keys(sectionState)) {
+    const name = key.replace(/Open$/, '');
+    const section = root?.querySelector(`[data-vab-section="${name}"]`);
+    if (section) sectionState[key] = !!section.open;
+  }
 }
 
 function bindSectionState(root) {
-  const collections = root?.querySelector('[data-vab-section="collections"]');
-  const histories = root?.querySelector('[data-vab-section="histories"]');
-  collections?.addEventListener('toggle', () => {
-    sectionState.collectionsOpen = !!collections.open;
-  });
-  histories?.addEventListener('toggle', () => {
-    sectionState.historiesOpen = !!histories.open;
-  });
+  for (const key of Object.keys(sectionState)) {
+    const name = key.replace(/Open$/, '');
+    const section = root?.querySelector(`[data-vab-section="${name}"]`);
+    section?.addEventListener('toggle', () => { sectionState[key] = !!section.open; });
+  }
+}
+
+function heatReasonText(item) {
+  return item?.reasons?.length ? item.reasons.join('、') : '无额外活跃信号';
+}
+
+function coolingPreviewHtml(preview) {
+  const active = (preview?.collections || []).filter(row => row.cooling.length);
+  if (!active.length) {
+    return '<div class="vab-note">当前所有集合都在软上限以内，不需要降温。以后超过软上限时，这里会按“当前相关 / 最近提及 / 最近变化 / 新近加入”排序并列出候选。</div>';
+  }
+  return active.map(row => {
+    const kept = row.kept.slice(0, 10).map(x => `${esc(x.key)}(${Math.round(x.score)})`).join('、');
+    const cool = row.cooling.slice(0, 12).map(x => `
+      <div class="vab-child-row">
+        <div class="vab-child-main"><b>${esc(x.key)}</b><small>热度 ${Math.round(x.score)} · ${fmtBytes(x.bytes)} · ${esc(heatReasonText(x))}</small></div>
+      </div>`).join('');
+    return `<div class="vab-container-card">
+      <div class="vab-container-head"><b>${esc(row.label)}</b><span>${esc(row.path)} · 预计降温 ${row.cooling.length}项 / ${fmtBytes(row.coolingBytes)}</span></div>
+      <div class="vab-note">预计热留：${kept || '无'}${row.kept.length > 10 ? '…' : ''}</div>
+      <div class="vab-note"><b>降温候选：</b></div>${cool}
+    </div>`;
+  }).join('');
+}
+
+function catalogHtml(preview) {
+  const items = preview?.warmIndex || [];
+  if (!items.length) return '<div class="vab-note">当前没有需要建立温索引的降温候选。</div>';
+  return items.slice(0, 40).map(item => `
+    <div class="vab-child-row">
+      <div class="vab-child-main"><b>${esc(item.key)}</b><small>${esc(item.sourcePath)} · ${fmtBytes(item.bytes)} · ${esc(item.summary)}</small></div>
+    </div>`).join('') + (items.length > 40 ? `<div class="vab-note">另有 ${items.length - 40} 项未显示。</div>` : '');
 }
 
 function render() {
@@ -119,16 +237,13 @@ function render() {
     root.innerHTML = `<div class="vab-note">⚠ ${esc(lastError)}</div>`;
     return;
   }
-  if (!lastReport) {
+  if (!lastReport || !lastPreview) {
     root.innerHTML = '<div class="vab-note">等待读取MVU…</div>';
     return;
   }
 
   const { summary, collections, histories, profileLabel, policySource } = lastReport;
-  const problemRows = collections.filter(x => x.level !== 'ok');
-  if (!sectionState.collectionsOpen && problemRows.length) sectionState.collectionsOpen = true;
-  if (!sectionState.historiesOpen && histories.length) sectionState.historiesOpen = true;
-
+  const previewSummary = lastPreview.summary;
   const collectionHtml = collections.map(row => `
     <div class="vab-governor-row ${row.level}">
       <div><b>${esc(row.label)}</b><small>${esc(row.path)}</small></div>
@@ -145,17 +260,26 @@ function render() {
 
   root.innerHTML = `
     <div class="vab-status-row">
-      <span class="vab-badge ok">● 只读分析</span>
+      <span class="vab-badge ok">● 只读预览</span>
       <span class="vab-badge ok">● ${esc(sourceText(policySource))}</span>
     </div>
-    <div class="vab-note"><b>这是变量卡通用治理器，不是主神空间专属。</b> 当前策略：${esc(profileLabel || '通用自动发现')}。本阶段绝不删除、归档或改写任何MVU变量。</div>
+    <div class="vab-note"><b>这是变量卡通用治理器，不是任何单一卡专属。</b> 当前策略：${esc(profileLabel || '通用自动发现')}。v0.4 只计算热度、温索引和降温计划，绝不删除、归档或改写MVU。</div>
     <div class="vab-actions"><button class="menu_button vab-governor-refresh">刷新分析</button></div>
     <div class="vab-governor-summary">
-      stat_data：${fmtBytes(summary.totalStatBytes)} · 超硬上限 ${summary.hard} 组 · 超软上限 ${summary.warn} 组 · 估算可降温/历史化 ${summary.candidateCount} 项
+      stat_data：${fmtBytes(summary.totalStatBytes)} · 动态集合 ${collections.length} · 当前降温候选 ${previewSummary.totalCandidateCount} 项 · 预计可移出约 ${fmtBytes(previewSummary.totalEstimatedBytes)}
     </div>
     <details class="vab-section" data-vab-section="collections" ${sectionState.collectionsOpen ? 'open' : ''}>
       <summary>集合热区预算（${collections.length}）</summary>
-      ${collectionHtml || '<div class="vab-note">当前没有命中已知策略；通用自动发现也未发现明显动态集合。</div>'}
+      ${collectionHtml || '<div class="vab-note">当前没有识别到动态集合。</div>'}
+    </details>
+    <details class="vab-section" data-vab-section="cooling" ${sectionState.coolingOpen ? 'open' : ''}>
+      <summary>🔥 热度排序与降温预览（${previewSummary.candidateCount}）</summary>
+      ${coolingPreviewHtml(lastPreview)}
+    </details>
+    <details class="vab-section" data-vab-section="catalog" ${sectionState.catalogOpen ? 'open' : ''}>
+      <summary>📇 温索引预览（${lastPreview.warmIndex.length}）</summary>
+      <div class="vab-note">正式降温后只保留这种轻量目录用于“我会哪些武功 / 我认识哪些人”之类的目录查询；完整JSON仍进入冷档案。</div>
+      ${catalogHtml(lastPreview)}
     </details>
     <details class="vab-section" data-vab-section="histories" ${sectionState.historiesOpen ? 'open' : ''}>
       <summary>活跃对象内部历史（${histories.length}）</summary>
@@ -177,6 +301,14 @@ export async function refreshReport() {
     const statData = state?.latestMvu?.statData;
     if (!statData) throw new Error('当前聊天还没有可读取的 MVU stat_data');
     lastReport = analyzeHotState(statData, { externalPolicy: readCardPolicy() });
+    const scopeKey = state?.current?.scopeKey || state?.current?.chatId || 'unknown-scope';
+    const msgCount = messageCount();
+    const touchMap = observeHeatTouches(statData, lastReport, scopeKey, msgCount);
+    lastPreview = buildCoolingPreview(statData, lastReport, {
+      recentText: recentConversationText(),
+      touchMap,
+      messageCount: msgCount,
+    });
     lastError = '';
     render();
     return lastReport;
@@ -192,9 +324,7 @@ export async function refreshReport() {
 function start() {
   ensurePanel();
   setTimeout(() => refreshReport(), 1200);
-  // Deliberately no repeating UI refresh. The governor refreshes when its drawer is opened
-  // (bootstrap.js) or when the user taps "刷新分析". This avoids mobile details auto-collapse
-  // and unnecessary DOM churn while the panel is only a diagnostics surface.
+  // No repeating UI redraw. Refresh occurs when the governor drawer opens or the user taps refresh.
 }
 
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, { once: true });
@@ -204,5 +334,6 @@ window.VariableArchiveBridgeHotStateGovernor = {
   VERSION,
   refresh: refreshReport,
   getReport: () => lastReport ? structuredClone(lastReport) : null,
-  getStatus: () => ({ running, lastError, hasReport: !!lastReport, readOnly: true, universal: true }),
+  getPreview: () => lastPreview ? structuredClone(lastPreview) : null,
+  getStatus: () => ({ running, lastError, hasReport: !!lastReport, hasPreview: !!lastPreview, readOnly: true, universal: true }),
 };
