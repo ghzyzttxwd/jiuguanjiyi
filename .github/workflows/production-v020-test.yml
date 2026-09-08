@@ -7,6 +7,7 @@ on:
       - 'production_auto.js'
       - 'bootstrap.js'
       - 'hot_archive_reconcile.js'
+      - 'hot_archive_reconcile_core.js'
       - 'manifest.json'
       - 'experimental/**'
       - '.github/workflows/production-v020-test.yml'
@@ -27,6 +28,7 @@ jobs:
         run: |
           node --check bootstrap.js
           node --check hot_archive_reconcile.js
+          node --check hot_archive_reconcile_core.js
           node --check production_auto.js
           node --check experimental/boot_guard_core.js
           node --check experimental/recall_safe.js
@@ -34,6 +36,37 @@ jobs:
           node --check experimental/rehydration_transaction.js
           node --check experimental/one_time_archive_test_core.js
           node --check experimental/one_time_archive_test.js
+      - name: Hot archive reconcile behavior
+        run: |
+          node --input-type=module <<'JS'
+          import { selectHotArchiveMatches } from './hot_archive_reconcile_core.js';
+          const scopeKey = 'card_x:chat_y';
+          const archived = {
+            id: 'arc_1',
+            scopeKey,
+            status: 'archived',
+            pointer: '/人物/佟佳氏',
+            childKey: '佟佳氏',
+            sourcePath: '/人物',
+          };
+          const unrelated = {
+            id: 'arc_2',
+            scopeKey,
+            status: 'archived',
+            pointer: '/人物/毛东珠',
+            childKey: '毛东珠',
+            sourcePath: '/人物',
+          };
+          const hot = { 人物: { 佟佳氏: { 好感: 80 } } };
+          const matches = selectHotArchiveMatches({ archives: [archived, unrelated], statData: hot, scopeKey });
+          if (matches.length !== 1) throw new Error(`expected 1 hot match, got ${matches.length}`);
+          if (matches[0].pointer !== '/人物/佟佳氏') throw new Error(`wrong match ${matches[0].pointer}`);
+          const absent = selectHotArchiveMatches({ archives: [archived], statData: { 人物: {} }, scopeKey });
+          if (absent.length !== 0) throw new Error('cold-only record must not be closed');
+          const wrongScope = selectHotArchiveMatches({ archives: [archived], statData: hot, scopeKey: 'other' });
+          if (wrongScope.length !== 0) throw new Error('cross-scope archive must not be touched');
+          console.log('hot archive reconcile behavior ok');
+          JS
       - name: One-time archive selector behavior
         run: |
           node --input-type=module <<'JS'
@@ -70,6 +103,7 @@ jobs:
           ! grep -q "lifecycle_watchdog.js" bootstrap.js
           grep -q '"version": "0.2.1"' manifest.json
           grep -q '"auto_update": true' manifest.json
+          grep -q "selectHotArchiveMatches" hot_archive_reconcile.js
           grep -q "core-hot-presence-reconcile" hot_archive_reconcile.js
           grep -q "status: 'restored'" hot_archive_reconcile.js
           grep -q "hotAuthoritative: true" hot_archive_reconcile.js
