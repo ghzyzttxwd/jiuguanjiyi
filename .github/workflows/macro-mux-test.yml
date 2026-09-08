@@ -1,0 +1,61 @@
+name: VAB Macro Mux Tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'macro_mux.js'
+      - 'macro_mux_core.js'
+      - 'warm_catalog.js'
+      - 'warm_catalog_core.js'
+      - 'bootstrap.js'
+      - '.github/workflows/macro-mux-test.yml'
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Treat JS as ES modules
+        run: printf '{"type":"module"}\n' > package.json
+      - name: Syntax
+        run: |
+          node --check macro_mux.js
+          node --check macro_mux_core.js
+          node --check warm_catalog.js
+          node --check warm_catalog_core.js
+          node --check bootstrap.js
+      - name: Routing behavior
+        run: |
+          node --input-type=module <<'JS'
+          import { isDirectoryIntent, chooseArchiveMacroContext } from './macro_mux_core.js';
+          if (!isDirectoryIntent('我会哪些武学？')) throw new Error('directory intent missing');
+          if (isDirectoryIntent('紫霞神功现在是什么境界？')) throw new Error('detail query misclassified');
+          const catalog = '<catalog>三门武学</catalog>';
+          const archive = '<archive>完整紫霞神功JSON</archive>';
+          if (chooseArchiveMacroContext({query:'我会哪些武学？', catalogContext:catalog, archiveContext:archive}) !== catalog) throw new Error('directory must prefer catalog');
+          if (chooseArchiveMacroContext({query:'紫霞神功现在是什么境界？', catalogContext:catalog, archiveContext:archive}) !== archive) throw new Error('detail must keep full archive');
+          if (chooseArchiveMacroContext({query:'我会哪些武学？', catalogContext:'', archiveContext:archive}) !== archive) throw new Error('empty catalog must fail open to archive');
+          console.log('macro mux routing ok');
+          JS
+      - name: Safety and load-order invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q "import './macro_mux.js'" bootstrap.js
+          grep -q "varArchiveContext" macro_mux.js
+          grep -q "buildContextFromRecent" macro_mux.js
+          grep -q "noPromptMessageInjection: true" macro_mux.js
+          ! grep -q "replaceMvuData\|archiveChild\|restoreArchive\|setExtensionPrompt\|addOneMessage" macro_mux.js macro_mux_core.js
+          ! grep -q "new MutationObserver" macro_mux.js macro_mux_core.js
+          python - <<'PY'
+          text=open('bootstrap.js',encoding='utf-8').read()
+          if text.index("import './macro_mux.js'") > text.index("import './index.js'"):
+              raise SystemExit('macro mux must load before index.js')
+          print('macro mux load order ok')
+          PY
