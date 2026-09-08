@@ -87,6 +87,39 @@ jobs:
           unzip -l dist/VAB-Mobile-Canary-Companion.zip
           unzip -p dist/VAB-Mobile-Canary-Companion.zip manifest.json | grep -q 'Canary伴侣'
 
+      - name: Verify packaged relative import graph
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf package-check
+          mkdir package-check
+          unzip -q dist/VAB-Mobile-Canary-Companion.zip -d package-check
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          root = Path('package-check').resolve()
+          missing = []
+          edges = 0
+          for f in root.rglob('*.js'):
+              text = f.read_text('utf-8')
+              pattern = re.compile(r"(?:from\s+|import\s*\()(['\"])(\.[^'\"]+)\1")
+              for m in pattern.finditer(text):
+                  edges += 1
+                  rel = m.group(2)
+                  target = (f.parent / rel).resolve()
+                  if not target.exists() and target.suffix == '':
+                      target = Path(str(target) + '.js')
+                  if not target.exists():
+                      missing.append((str(f.relative_to(root)), rel))
+          if missing:
+              raise SystemExit(f'missing relative imports: {missing}')
+          print({'js_files': len(list(root.rglob('*.js'))), 'relative_import_edges': edges, 'missing': 0})
+          PY
+          test -f package-check/manifest.json
+          test -f package-check/canary_bootstrap.js
+          test -f package-check/canary_loader.js
+          test -f package-check/experimental/memory_master_safe.js
+
       - name: Upload installable zip
         uses: actions/upload-artifact@v4
         with:
