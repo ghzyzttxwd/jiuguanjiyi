@@ -1,15 +1,16 @@
-// Variable Archive Bridge v0.6.1 bootstrap
-// Universal MVU archive + recall + hot-state governance + warm catalog + safe cooling + self-update.
+// Variable Archive Bridge v0.7.0 bootstrap
+// Universal MVU archive + recall + hot-state governance + warm catalog + safe auto cooling + self-update.
 
 import './macro_mux.js';
 import './index.js';
 import './mvu_recovery.js';
 import './hot_archive_reconcile.js';
 import './smart_scan.js';
-import './production_auto.js';
 import './hot_state_governor.js';
 import './warm_catalog.js';
 import './safe_cooling_executor.js';
+import './auto_cooling_scheduler.js';
+import './unified_runtime.js';
 import './self_update.js';
 import './ui_version_surface.js';
 
