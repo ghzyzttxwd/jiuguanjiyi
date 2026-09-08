@@ -1,5 +1,5 @@
-// Variable Archive Bridge v0.5.0 bootstrap
-// Universal MVU archive + recall + hot-state governance + warm catalog + self-update.
+// Variable Archive Bridge v0.6.0 bootstrap
+// Universal MVU archive + recall + hot-state governance + warm catalog + safe cooling + self-update.
 
 import './macro_mux.js';
 import './index.js';
@@ -9,6 +9,7 @@ import './smart_scan.js';
 import './production_auto.js';
 import './hot_state_governor.js';
 import './warm_catalog.js';
+import './safe_cooling_executor.js';
 import './self_update.js';
 
 (function installVabDrawerFix() {
