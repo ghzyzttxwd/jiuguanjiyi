@@ -33,7 +33,11 @@ let retryTimer = null;
 let eventBindings = [];
 let recallModule = null;
 let lifecycleModule = null;
+let archiveTestModule = null;
 let lastFault = '';
+let testRunning = false;
+let lastTestResult = null;
+let testStatusText = '一次性真实归档测试尚未执行 · 只绕过容量/闲置门槛，不改正式阈值';
 
 function ctx() {
   try {
@@ -166,7 +170,7 @@ async function tryActivate() {
 }
 
 async function healthCheck() {
-  if (!loaded || blocked || faulted) return;
+  if (!loaded || blocked || faulted || testRunning) return;
   if (!active) {
     scheduleActivation(300);
     return;
@@ -191,6 +195,57 @@ function host() {
   return document.querySelector('#vab-settings #vab-root');
 }
 
+function formatTestStatus(result) {
+  if (!result) return testStatusText;
+  if (result.status === 'passed') {
+    return `✅ 实测通过：${result.pointer} · 热节点 ${result.beforeCount}→${result.afterCount} · 冷档案已落库 · 自动快照已落库。下一步召回测试关键词：${result.childKey}`;
+  }
+  return `⚠ 实测未通过：${result.reason || '未知原因'}${result.pointer ? ` · ${result.pointer}` : ''}`;
+}
+
+async function runProductionArchiveTest() {
+  if (testRunning) return lastTestResult;
+  if (!active || blocked || faulted || !archiveTestModule?.runOneTimeArchiveTest) {
+    lastTestResult = { status: 'failed', reason: '自动记忆主控尚未处于可测试状态' };
+    testStatusText = formatTestStatus(lastTestResult);
+    ensureUi();
+    return lastTestResult;
+  }
+
+  testRunning = true;
+  testStatusText = '🧪 正在执行一次性真实归档事务 · 正常生命周期写入已临时暂停';
+  ensureUi();
+
+  const lifecycleWasEnabled = !!lifecycleModule?.AutoLifecycleSafeDiagnostics?.isEnabled?.();
+  try {
+    if (lifecycleWasEnabled) {
+      await lifecycleModule.setLifecycleEnabledSession(false, { skipConfirm: true });
+    }
+
+    const result = await archiveTestModule.runOneTimeArchiveTest();
+    lastTestResult = result;
+    testStatusText = formatTestStatus(result);
+    return result;
+  } catch (error) {
+    lastTestResult = { status: 'failed', reason: error?.message || String(error) };
+    testStatusText = formatTestStatus(lastTestResult);
+    return lastTestResult;
+  } finally {
+    if (lifecycleWasEnabled && !blocked && !faulted) {
+      try {
+        const restored = await lifecycleModule.setLifecycleEnabledSession(true, { skipConfirm: true });
+        if (!restored || !lifecycleModule.AutoLifecycleSafeDiagnostics?.isEnabled?.()) {
+          await enterFault('一次性归档测试后生命周期层未能恢复');
+        }
+      } catch (error) {
+        await enterFault(`一次性归档测试后生命周期恢复异常：${error?.message || error}`);
+      }
+    }
+    testRunning = false;
+    ensureUi();
+  }
+}
+
 function ensureUi() {
   const root = host();
   if (!root) return;
@@ -204,8 +259,15 @@ function ensureUi() {
       <summary>🧠📦 自动记忆 ${VERSION}</summary>
       <div class="vab-note" data-vab-prod-status></div>
       <div class="vab-note">默认自动运行：MVU只保留热状态，旧人物/武学/世界资料进入冷档案；相关内容会按需召回，节点真正重新活跃时做保守收口。生成期间不写、每次最多处理1项、异常自动熔断。</div>
-      <div class="vab-actions"><button class="menu_button" data-vab-prod-retry style="display:none">解除安全模式并重试</button></div>`;
+      <div class="vab-actions">
+        <button class="menu_button" data-vab-prod-test>🧪 一次性真实归档测试</button>
+        <button class="menu_button" data-vab-prod-retry style="display:none">解除安全模式并重试</button>
+      </div>
+      <div class="vab-note" data-vab-prod-test-status></div>`;
     root.prepend(box);
+    box.querySelector('[data-vab-prod-test]')?.addEventListener('click', () => {
+      runProductionArchiveTest().catch(error => enterFault(error));
+    });
     box.querySelector('[data-vab-prod-retry]')?.addEventListener('click', async () => {
       try {
         const cleared = clearBootSafeMode(readBoot());
@@ -225,6 +287,10 @@ function ensureUi() {
   if (status) status.textContent = `${active ? '●' : '○'} ${statusText}`;
   const retry = box.querySelector('[data-vab-prod-retry]');
   if (retry) retry.style.display = (blocked || faulted) ? '' : 'none';
+  const testButton = box.querySelector('[data-vab-prod-test]');
+  if (testButton) testButton.disabled = testRunning || !active || blocked || faulted;
+  const testStatus = box.querySelector('[data-vab-prod-test-status]');
+  if (testStatus) testStatus.textContent = testStatusText;
 
   // The production UI is intentionally simple; hide the two low-level RC panels if they were mounted.
   const recallBox = document.querySelector('#vab-recall-safe');
@@ -250,9 +316,10 @@ async function loadRuntime() {
   statusText = '正在加载自动记忆引擎…';
   ensureUi();
   try {
-    const [recall, lifecycle] = await Promise.all([
+    const [recall, lifecycle, archiveTest] = await Promise.all([
       import('./experimental/recall_safe.js'),
       import('./experimental/auto_lifecycle_safe.js'),
+      import('./experimental/one_time_archive_test.js'),
     ]);
     if (typeof recall.mountRecallSafe !== 'function' || typeof recall.setRecallEnabledSession !== 'function') {
       throw new Error('召回模块接口不完整');
@@ -260,9 +327,13 @@ async function loadRuntime() {
     if (typeof lifecycle.mountAutoLifecycleSafe !== 'function' || typeof lifecycle.setLifecycleEnabledSession !== 'function') {
       throw new Error('生命周期模块接口不完整');
     }
+    if (typeof archiveTest.runOneTimeArchiveTest !== 'function') {
+      throw new Error('一次性归档测试模块接口不完整');
+    }
 
     recallModule = recall;
     lifecycleModule = lifecycle;
+    archiveTestModule = archiveTest;
     recall.mountRecallSafe();
     lifecycle.mountAutoLifecycleSafe();
     loaded = true;
@@ -276,6 +347,7 @@ async function loadRuntime() {
     try { await recallModule?.unmountRecallSafe?.(); } catch {}
     recallModule = null;
     lifecycleModule = null;
+    archiveTestModule = null;
     loaded = false;
     blocked = true;
     lastFault = String(error?.message || error);
@@ -336,6 +408,8 @@ window.VariableArchiveBridgeAuto = {
     faulted,
     statusText,
     lastFault,
+    testRunning,
+    lastTestResult,
     boot: readBoot(),
   }),
   retry: async () => {
@@ -347,4 +421,5 @@ window.VariableArchiveBridgeAuto = {
     if (!loaded) await loadRuntime();
     else scheduleActivation(100);
   },
+  runOneTimeArchiveTest: runProductionArchiveTest,
 };
