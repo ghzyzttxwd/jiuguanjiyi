@@ -10,7 +10,7 @@ import { SmartHostSafeDiagnostics } from './smart_host_safe.js';
 import { RehydrationLiveSafeDiagnostics } from './rehydration_live_safe.js';
 import { summarizeLifecycleDecision } from './auto_lifecycle_core.js';
 
-const VERSION = '0.2.0-rc2';
+const VERSION = '0.2.0-rc3';
 const UI_INTERVAL_MS = 4000;
 const HEALTH_WATCHDOG_MS = 15000;
 const HEALTH_DEBOUNCE_MS = 650;
@@ -99,21 +99,23 @@ async function disableLifecycle() {
   return !AutoLifecycleSafeDiagnostics.isEnabled();
 }
 
-function currentPreflight() {
+function currentPreflight({ deepRecall = true } = {}) {
   const s = state();
-  let recall = null;
-  try { recall = RecallSafeDiagnostics.preview(); } catch {}
+  let recallMode = RecallSafeDiagnostics.getDecision?.()?.mode || 'auto-prompt';
+  if (deepRecall) {
+    try { recallMode = RecallSafeDiagnostics.preview()?.decision?.mode || recallMode; } catch {}
+  }
   return assessMasterPreflight({
     hasMvu: !!s?.latestMvu?.statData,
     legacyAutoEnabled: !!s?.settings?.autoArchiveGlobal,
     smartHostEnabled: !!SmartHostSafeDiagnostics?.getSettings?.()?.enabled,
     manualRehydrationArmed: !!RehydrationLiveSafeDiagnostics?.isArmed?.(),
-    recallMode: recall?.decision?.mode || 'auto-prompt',
+    recallMode,
   });
 }
 
 async function previewAll() {
-  const preflight = currentPreflight();
+  const preflight = currentPreflight({ deepRecall: true });
   lastPreflight = preflight;
   let recall = null;
   let lifecycle = null;
@@ -139,7 +141,7 @@ async function enableMaster() {
   if (busy || masterEnabled) return;
   busy = true;
   try {
-    const preflight = currentPreflight();
+    const preflight = currentPreflight({ deepRecall: true });
     lastPreflight = preflight;
     if (!preflight.ok) {
       statusText = `无法开启：${preflight.reason}`;
@@ -217,7 +219,9 @@ async function healthCheck() {
   });
   lastHealth = health;
 
-  const preflight = currentPreflight();
+  // Runtime health checks deliberately avoid a full cold-archive recall scan.
+  // The recall layer already self-disables on collision; here we only inspect its last decision/state.
+  const preflight = currentPreflight({ deepRecall: false });
   if (!preflight.ok) {
     failClosedCount++;
     await disableMaster({ reason: `运行中安全条件失效：${preflight.reason}` });
@@ -290,10 +294,10 @@ function ensureUi() {
   box.open = true;
   box.innerHTML = `
     <summary>🧠📦 统一自动记忆主控 ${VERSION}</summary>
-    <div class="vab-note">RC2：日常只保留这一个总开关。主控直接调用子系统API，不再模拟点击内部开关；开启时只弹一次总确认。统一协调：①冷档案按需Prompt召回；②热变量超载自动归档；③归档节点真正重新进入MVU时事务重激活。</div>
+    <div class="vab-note">RC3：日常只保留这一个总开关。主控直接调用子系统API，不模拟点击；开启时只弹一次总确认。运行期健康检查不再重复全量扫描冷档案，减少长对话下的额外CPU开销。</div>
     <label class="checkbox_label"><input type="checkbox" data-vab-master-enable> 本次页面会话启用统一自动记忆（实验RC）</label>
     <div class="vab-actions"><button class="menu_button" data-vab-master-preview>统一安全预检</button></div>
-    <div class="vab-note">保护：主控不持久化；事件触发健康检查 + 15秒低频看门狗；召回层退出、生命周期熔断、旧自动引擎/手动写入重新开启时一律 fail-closed，先停写入再清理本插件Prompt。</div>
+    <div class="vab-note">保护：主控不持久化；事件触发健康检查 + 15秒低频看门狗；召回层退出、生命周期熔断、旧自动引擎/手动写入重新开启时一律 fail-closed，先停写入再清理本插件Prompt。酒馆重绘设置面板后也会重新锁住子开关。</div>
     <div class="vab-note" data-vab-master-status>○ ${escapeHtml(statusText)}</div>`;
 
   host.prepend(box);
@@ -308,6 +312,8 @@ function ensureUi() {
 function updateUi() {
   const box = document.querySelector('#vab-memory-master-safe');
   if (!box) return;
+  // VAB's core panel can rerender with innerHTML, recreating child toggles. Re-apply locks idempotently.
+  if (masterEnabled) setLocks(true);
   const toggle = box.querySelector('[data-vab-master-enable]');
   if (toggle && toggle.checked !== masterEnabled) toggle.checked = masterEnabled;
   if (toggle) toggle.disabled = busy;
