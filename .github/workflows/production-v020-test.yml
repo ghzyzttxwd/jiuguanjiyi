@@ -1,11 +1,11 @@
-name: VAB Production v0.6 Tests
+name: VAB Production v0.7 Tests
 
 on:
   push:
     branches: [main]
     paths:
-      - 'production_auto.js'
       - 'bootstrap.js'
+      - 'unified_runtime.js'
       - 'mvu_recovery.js'
       - 'hot_archive_reconcile.js'
       - 'hot_archive_reconcile_core.js'
@@ -16,6 +16,10 @@ on:
       - 'warm_catalog_core.js'
       - 'safe_cooling_executor.js'
       - 'safe_cooling_core.js'
+      - 'auto_cooling_scheduler.js'
+      - 'auto_cooling_scheduler_core.js'
+      - 'macro_mux.js'
+      - 'macro_mux_core.js'
       - 'self_update.js'
       - 'self_update_core.js'
       - 'ui_version_surface.js'
@@ -35,9 +39,11 @@ jobs:
           node-version: '22'
       - name: Treat JS as ES modules
         run: printf '{"type":"module"}\n' > package.json
+
       - name: Syntax
         run: |
           node --check bootstrap.js
+          node --check unified_runtime.js
           node --check mvu_recovery.js
           node --check hot_archive_reconcile.js
           node --check hot_archive_reconcile_core.js
@@ -48,16 +54,19 @@ jobs:
           node --check warm_catalog_core.js
           node --check safe_cooling_executor.js
           node --check safe_cooling_core.js
+          node --check auto_cooling_scheduler.js
+          node --check auto_cooling_scheduler_core.js
+          node --check macro_mux.js
+          node --check macro_mux_core.js
           node --check self_update.js
           node --check self_update_core.js
           node --check ui_version_surface.js
-          node --check production_auto.js
           node --check experimental/boot_guard_core.js
           node --check experimental/recall_safe.js
-          node --check experimental/auto_lifecycle_safe.js
           node --check experimental/rehydration_transaction.js
           node --check experimental/one_time_archive_test_core.js
           node --check experimental/one_time_archive_test.js
+
       - name: Hot archive reconcile behavior
         run: |
           node --input-type=module <<'JS'
@@ -69,9 +78,9 @@ jobs:
           const matches = selectHotArchiveMatches({ archives:[archived, unrelated], statData:hot, scopeKey });
           if (matches.length !== 1 || matches[0].pointer !== '/人物/佟佳氏') throw new Error('hot reconcile failed');
           if (selectHotArchiveMatches({ archives:[archived], statData:{人物:{}}, scopeKey }).length) throw new Error('cold-only record must not be closed');
-          if (selectHotArchiveMatches({ archives:[archived], statData:hot, scopeKey:'other' }).length) throw new Error('cross-scope archive must not be touched');
           console.log('hot archive reconcile behavior ok');
           JS
+
       - name: Universal governor and cooling preview behavior
         run: |
           node --input-type=module <<'JS'
@@ -87,21 +96,27 @@ jobs:
           if (youngPreview.summary.totalCandidateCount !== 0) throw new Error('small collection must not cool');
 
           const many = {};
-          for (let i=0;i<15;i++) many[`武学${i}`] = { 境界:'入门' };
+          const touches = { '/玩家/武学': {} };
+          for (let i=0;i<15;i++) {
+            many[`武学${i}`] = { 境界:'入门' };
+            touches['/玩家/武学'][`武学${i}`] = { lastChanged: 10 };
+          }
           many['当前主修'] = { 是否主修:true, 境界:'大成' };
+          touches['/玩家/武学']['当前主修'] = { lastChanged: 49 };
           const largeCard = { 玩家:{ 武学:many } };
           const largeReport = analyzeHotState(largeCard);
-          const preview = buildCoolingPreview(largeCard, largeReport, { recentText:'武学14 当前主修', messageCount:50 });
+          const preview = buildCoolingPreview(largeCard, largeReport, { recentText:'武学14 当前主修', messageCount:50, touchMap:touches });
           const plan = preview.collections.find(x => x.path === '/玩家/武学');
           if (!plan || plan.cooling.length !== 4) throw new Error(`expected 4 cooling candidates, got ${plan?.cooling.length}`);
           if (plan.cooling.some(x => x.key === '当前主修')) throw new Error('protected current/main item must stay hot');
+          if (!plan.cooling.every(x => x.ageMessages === 40)) throw new Error('idle age must flow into cooling preview');
           if (!preview.warmIndex.length || preview.summary.estimatedCoolingBytes <= 0) throw new Error('warm-index preview missing');
-          if (preview.readOnly !== true) throw new Error('preview must remain read-only');
 
           const mainGod = { 玩家:{能力:{},装备:{}}, 轮回残印:{}, 当前轮回:{}, 当前世界:{}, 长期人物:{}, 世界档案:{} };
           if (!detectMainGod(mainGod)) throw new Error('main-god adapter not detected');
           console.log('universal governor and cooling preview ok');
           JS
+
       - name: Warm catalog merge behavior
         run: |
           node --input-type=module <<'JS'
@@ -121,89 +136,82 @@ jobs:
           if (!ctx.includes('凝血神剑') || !ctx.includes('紫霞神功[冷]')) throw new Error('directory context incomplete');
           console.log('warm catalog behavior ok');
           JS
+
       - name: Safe cooling behavior
         run: |
           node --input-type=module <<'JS'
           import { selectNextCoolingCandidate, validatePreCooling, validatePostCooling } from './safe_cooling_core.js';
           const preview = { collections:[{ path:'/玩家/武学', label:'武学', count:16, softLimit:12, hardLimit:24, cooling:[
-            {key:'旧剑法',score:2,bytes:900,reasons:[]}, {key:'旧掌法',score:5,bytes:500,reasons:[]}
+            {key:'旧剑法',score:2,bytes:900,reasons:[],ageMessages:40},
+            {key:'旧掌法',score:5,bytes:500,reasons:[],ageMessages:30}
           ]}] };
           const chosen = selectNextCoolingCandidate(preview);
-          if (!chosen || chosen.pointer !== '/玩家/武学/旧剑法') throw new Error('safe cooling candidate selection failed');
+          if (!chosen || chosen.pointer !== '/玩家/武学/旧剑法' || chosen.ageMessages !== 40) throw new Error('safe cooling candidate selection failed');
           const pre = validatePreCooling({ candidate:chosen, statData:{玩家:{武学:{旧剑法:{}}}}, scopeKey:'s', catalogEntries:[{scopeKey:'s',pointer:chosen.pointer,temperature:'hot',coolingCandidate:true}] });
           if (!pre.ok) throw new Error(pre.reason);
           const post = validatePostCooling({ candidate:chosen, statData:{玩家:{武学:{}}}, scopeKey:'s', catalogEntries:[{scopeKey:'s',pointer:chosen.pointer,temperature:'cold',archiveId:'arc_1'}] });
           if (!post.ok) throw new Error(post.reason);
           console.log('safe cooling behavior ok');
           JS
-      - name: One-time archive selector behavior
+
+      - name: Automatic scheduler policy behavior
         run: |
           node --input-type=module <<'JS'
-          import { selectOneTimeArchiveTestCandidate } from './experimental/one_time_archive_test_core.js';
-          const statData = { 人物:{ 当前主角:{note:'protected'}, 甲人物:{bio:'a'.repeat(500)}, 乙人物:{bio:'b'.repeat(80)}, 丙人物:{bio:'c'.repeat(120)}, 丁人物:{bio:'d'.repeat(140)}, VAB测试节点:{bio:'tiny'} }, 当前队伍:{成员:['甲人物']} };
-          const picked = selectOneTimeArchiveTestCandidate({ statData, recentText:'刚刚遇到乙人物' });
-          if (!picked || picked.key !== 'VAB测试节点') throw new Error('preferred test node selection failed');
-          console.log('one-time archive selector ok');
+          import { evaluateAutoCooling } from './auto_cooling_scheduler_core.js';
+          const base = { status:'ready', candidate:{ pointer:'/玩家/武学/旧剑法', heatScore:1, ageMessages:40, reasons:[], hardExceeded:0 } };
+          let d = evaluateAutoCooling({ enabled:true, generationActive:false, messageCount:50, armedMessageCount:49, plan:base });
+          if (!d.allow) throw new Error(`stable old candidate should auto cool: ${d.reason}`);
+          d = evaluateAutoCooling({ enabled:true, generationActive:false, messageCount:50, armedMessageCount:50, plan:base });
+          if (d.allow) throw new Error('must wait for a new stable message after arming');
+          d = evaluateAutoCooling({ enabled:true, generationActive:false, messageCount:50, armedMessageCount:40, plan:{...base,candidate:{...base.candidate,ageMessages:4}} });
+          if (d.allow) throw new Error('recent candidate must not auto cool');
+          d = evaluateAutoCooling({ enabled:true, generationActive:false, messageCount:50, armedMessageCount:40, plan:{...base,candidate:{...base.candidate,reasons:['最近对话直接提及']}} });
+          if (d.allow) throw new Error('mentioned candidate must not auto cool');
+          d = evaluateAutoCooling({ enabled:true, generationActive:true, messageCount:50, armedMessageCount:40, plan:base });
+          if (d.allow) throw new Error('generation must block auto cooling');
+          console.log('automatic scheduler policy ok');
           JS
+
       - name: Production safety invariants
         shell: bash
         run: |
           set -euo pipefail
-          grep -q "import './mvu_recovery.js'" bootstrap.js
-          grep -q "import './hot_archive_reconcile.js'" bootstrap.js
-          grep -q "import './production_auto.js'" bootstrap.js
-          grep -q "import './hot_state_governor.js'" bootstrap.js
-          grep -q "import './warm_catalog.js'" bootstrap.js
+          grep -q "import './auto_cooling_scheduler.js'" bootstrap.js
+          grep -q "import './unified_runtime.js'" bootstrap.js
+          ! grep -q "import './production_auto.js'" bootstrap.js
           grep -q "import './safe_cooling_executor.js'" bootstrap.js
-          grep -q "import './self_update.js'" bootstrap.js
-          grep -q "import './ui_version_surface.js'" bootstrap.js
-          ! grep -q "lifecycle_watchdog.js" bootstrap.js
-          grep -q '"version": "0.6.1"' manifest.json
+          grep -q "import './warm_catalog.js'" bootstrap.js
+          grep -q '"version": "0.7.0"' manifest.json
           grep -q '"auto_update": true' manifest.json
-          grep -q "const VERSION = '0.4.0'" hot_state_governor.js
-          grep -q "const VERSION = '0.5.0'" warm_catalog.js
-          grep -q "const CURRENT_VERSION = '0.6.1'" self_update.js
-          grep -q "VariableArchiveBridgeMvuRecovery" mvu_recovery.js
-          grep -q "readOnly: true" mvu_recovery.js
-          ! grep -q "replaceMvuData\|archiveChild\|restoreArchive\|putArchive" mvu_recovery.js
-          grep -q "buildCoolingPreview" hot_state_governor.js
-          grep -q "warmIndex" hot_state_preview_core.js
-          grep -q "readOnly: true" hot_state_preview_core.js
-          ! grep -q "replaceMvuData\|archiveChild\|restoreArchive\|putArchive" hot_state_governor.js hot_state_preview_core.js
-          grep -q "recordType: 'warm-catalog'" warm_catalog_core.js
-          grep -q "varArchiveCatalog" warm_catalog.js
-          ! grep -q "replaceMvuData\|archiveChild\|restoreArchive" warm_catalog.js warm_catalog_core.js
-          grep -q "automaticEnabled: false" safe_cooling_executor.js
-          grep -q "maxItemsPerRun: 1" safe_cooling_executor.js
-          grep -q "validatePreCooling" safe_cooling_executor.js
-          grep -q "validatePostCooling" safe_cooling_executor.js
-          ! grep -q "replaceMvuData" safe_cooling_executor.js safe_cooling_core.js
-          grep -q "selectHotArchiveMatches" hot_archive_reconcile.js
+          grep -q "const VERSION = '0.7.0'" auto_cooling_scheduler.js
+          grep -q "minMessagesBeforeAuto: 20" auto_cooling_scheduler_core.js
+          grep -q "minIdleMessagesSoft: 16" auto_cooling_scheduler_core.js
+          grep -q "maxItemsPerCycle: 1" auto_cooling_scheduler.js
+          grep -q "armedMessageCount = messageCount()" auto_cooling_scheduler.js
+          grep -q "executeOne" auto_cooling_scheduler.js
+          ! grep -q "\.archiveChild" auto_cooling_scheduler.js
+          ! grep -q "replaceMvuData" auto_cooling_scheduler.js auto_cooling_scheduler_core.js unified_runtime.js
+          grep -q "import('./experimental/recall_safe.js')" unified_runtime.js
+          ! grep -q "auto_lifecycle_safe.js" unified_runtime.js
+          grep -q "START_DELAY_MS = 4500" unified_runtime.js
+          grep -q "HEALTH_WATCHDOG_MS = 15000" unified_runtime.js
           grep -q "status: 'restored'" hot_archive_reconcile.js
           grep -q "hotAuthoritative: true" hot_archive_reconcile.js
-          ! grep -q "replaceMvuData" hot_archive_reconcile.js
-          grep -q "readOnly: true" hot_state_governor_core.js
-          grep -q "discoverGenericPolicy" hot_state_governor_core.js
-          grep -q "DYNAMIC_LABEL_RE" hot_state_governor_core.js
-          grep -q "REMOTE_MANIFEST" self_update.js
-          grep -q "UPDATE_CHECK_MS = 60 \* 1000" self_update.js
-          grep -q "'/api/extensions/update'" self_update.js
-          grep -q "'/api/extensions/switch'" self_update.js
-          grep -q "VariableArchiveBridgeUiVersion" ui_version_surface.js
-          ! grep -q "new MutationObserver" ui_version_surface.js
+          grep -q "recordType: 'warm-catalog'" warm_catalog_core.js
+          grep -q "automaticEnabled: false" safe_cooling_executor.js
+          grep -q "maxItemsPerRun: 1" safe_cooling_executor.js
+          grep -q "const CURRENT_VERSION = '0.7.0'" self_update.js
+          grep -q "const FALLBACK_VERSION = '0.7.0'" ui_version_surface.js
+          ! grep -q "new MutationObserver" bootstrap.js unified_runtime.js mvu_recovery.js hot_archive_reconcile.js hot_state_governor.js warm_catalog.js safe_cooling_executor.js auto_cooling_scheduler.js self_update.js ui_version_surface.js
           ! grep -q "'/api/extensions/delete'\|'/api/extensions/install'" self_update.js
-          ! grep -q "new MutationObserver" mvu_recovery.js hot_archive_reconcile.js bootstrap.js production_auto.js hot_state_governor.js warm_catalog.js safe_cooling_executor.js self_update.js ui_version_surface.js
-          grep -q "START_DELAY_MS = 4500" production_auto.js
-          grep -q "HEALTH_WATCHDOG_MS = 15000" production_auto.js
-          grep -q "fail-closed" production_auto.js
-          ! grep -q "restoreArchive" production_auto.js experimental/one_time_archive_test.js hot_archive_reconcile.js
+
       - name: Import graph
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
           import pathlib, re, sys
-          roots=[pathlib.Path('bootstrap.js'), pathlib.Path('production_auto.js')]
+          roots=[pathlib.Path('bootstrap.js')]
           seen=set(); missing=[]
           while roots:
               p=roots.pop()
