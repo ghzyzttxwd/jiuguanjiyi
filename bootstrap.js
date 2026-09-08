@@ -1,10 +1,11 @@
-// Variable Archive Bridge v0.2.2 bootstrap
-// Stable core + independent hot-presence reconciliation + smart path scanner + automatic memory lifecycle.
+// Variable Archive Bridge v0.3.0 bootstrap
+// Stable archive core + hot-presence reconciliation + smart path scanner + automatic memory lifecycle + read-only hot-state governance.
 
 import './index.js';
 import './hot_archive_reconcile.js';
 import './smart_scan.js';
 import './production_auto.js';
+import './hot_state_governor.js';
 
 (function installVabDrawerFix() {
     if (window.__VAB_DRAWER_FIX_INSTALLED__) return;
