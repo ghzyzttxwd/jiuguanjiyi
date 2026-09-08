@@ -27,7 +27,7 @@
         box.innerHTML = `
           <summary>🧪 智能托管安全测试入口</summary>
           <div class="vab-note">
-            正常启动不会载入任何实验模块。只有你主动点击“加载候选模块”时，才临时载入智能托管、冷档案召回、重激活预览/事务，以及新的统一生命周期托管候选。所有自动功能与写入武装状态仍保持关闭；重启酒馆后不会自动再次载入。
+            正常启动不会载入任何实验模块。只有你主动点击“加载候选模块”时，才临时载入智能托管、冷档案召回、重激活预览/事务、统一生命周期，以及最上层的“统一自动记忆主控”。所有自动功能与写入武装状态仍保持关闭；重启酒馆后不会自动再次载入。
           </div>
           <div class="vab-actions">
             <button class="menu_button" data-vab-safe-load>加载候选模块</button>
@@ -60,6 +60,7 @@
             let rehydration = null;
             let rehydrationLive = null;
             let autoLifecycle = null;
+            let memoryMaster = null;
             try {
                 smart = await import('./experimental/smart_host_safe.js');
                 if (typeof smart.mountSmartHostSafe !== 'function') {
@@ -91,9 +92,16 @@
                 }
                 autoLifecycle.mountAutoLifecycleSafe();
 
-                loadedModules = { smart, recall, rehydration, rehydrationLive, autoLifecycle };
-                statusText = '候选模块已载入；所有自动开关仍关闭。统一生命周期候选也只在你本次会话手动开启后才会改MVU，且“提到冷档案”不会触发硬恢复。';
+                memoryMaster = await import('./experimental/memory_master_safe.js');
+                if (typeof memoryMaster.mountMemoryMasterSafe !== 'function') {
+                    throw new Error('统一自动记忆主控候选缺少 mountMemoryMasterSafe()');
+                }
+                memoryMaster.mountMemoryMasterSafe();
+
+                loadedModules = { smart, recall, rehydration, rehydrationLive, autoLifecycle, memoryMaster };
+                statusText = '候选模块已载入；所有自动开关仍关闭。最上方“统一自动记忆主控”是最终日常形态候选：一个总开关协调Prompt召回、热冷归档和重激活，且任一子系统异常会联动关闭。';
             } catch (error) {
+                try { await memoryMaster?.unmountMemoryMasterSafe?.(); } catch {}
                 try { autoLifecycle?.unmountAutoLifecycleSafe?.(); } catch {}
                 try { rehydrationLive?.unmountRehydrationLiveSafe?.(); } catch {}
                 try { rehydration?.unmountRehydrationSafe?.(); } catch {}
@@ -114,6 +122,7 @@
             statusText = '正在卸载候选模块…';
             sync();
             try {
+                await loadedModules.memoryMaster?.unmountMemoryMasterSafe?.();
                 loadedModules.autoLifecycle?.unmountAutoLifecycleSafe?.();
                 loadedModules.rehydrationLive?.unmountRehydrationLiveSafe?.();
                 loadedModules.rehydration?.unmountRehydrationSafe?.();
