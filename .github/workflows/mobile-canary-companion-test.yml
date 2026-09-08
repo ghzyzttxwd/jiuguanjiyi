@@ -1,0 +1,44 @@
+name: VAB Mobile Canary Companion Tests
+
+on:
+  push:
+    paths:
+      - 'manifest.json'
+      - 'canary_bootstrap.js'
+      - 'canary_loader.js'
+      - '.github/workflows/mobile-canary-companion-test.yml'
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Manifest contract
+        run: |
+          node -e "const m=require('./manifest.json'); if(m.js!=='canary_bootstrap.js') process.exit(1); if(m.loading_order!==130) process.exit(2); if(m.auto_update!==false) process.exit(3); if(!String(m.display_name).includes('Canary')) process.exit(4); console.log(m)"
+      - name: Syntax
+        run: |
+          node --check canary_bootstrap.js
+          node --check canary_loader.js
+      - name: Startup inertness
+        shell: bash
+        run: |
+          grep -q "import './canary_loader.js'" canary_bootstrap.js
+          ! grep -q "index.js" canary_bootstrap.js
+          ! grep -q "smart_scan" canary_bootstrap.js
+          ! grep -q "experimental/" canary_bootstrap.js
+          ! grep -q "new MutationObserver" canary_loader.js
+          grep -q "loadBtn?.addEventListener('click'" canary_loader.js
+          grep -q "stableReady" canary_loader.js
+          grep -q "await import('./experimental/recall_safe.js')" canary_loader.js
+          grep -q "await import('./experimental/auto_lifecycle_safe.js')" canary_loader.js
+          grep -q "await import('./experimental/memory_master_safe.js')" canary_loader.js
+          grep -q "await import('./experimental/canary_report_safe.js')" canary_loader.js
+          ! grep -q "replaceMvuData" canary_loader.js
+          ! grep -q "archiveChild(" canary_loader.js
+          ! grep -q "restoreArchive(" canary_loader.js
