@@ -1,0 +1,41 @@
+name: VAB Canary Report Tests
+
+on:
+  push:
+    paths:
+      - 'experimental/canary_report_core.js'
+      - 'experimental/canary_report_safe.js'
+      - 'experimental/test_canary_report_core.mjs'
+      - '.github/workflows/canary-report-test.yml'
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Treat JS as ES modules
+        run: printf '{"type":"module"}\n' > package.json
+      - name: Canary report privacy tests
+        run: node experimental/test_canary_report_core.mjs
+      - name: Syntax
+        run: |
+          node --check experimental/canary_report_core.js
+          node --check experimental/canary_report_safe.js
+          node --check experimental/test_canary_report_core.mjs
+      - name: Privacy and write-safety invariants
+        shell: bash
+        run: |
+          ! grep -q "replaceMvuData" experimental/canary_report_safe.js
+          ! grep -q "archiveChild" experimental/canary_report_safe.js
+          ! grep -q "restoreArchive" experimental/canary_report_safe.js
+          ! grep -q "setExtensionPrompt" experimental/canary_report_safe.js
+          ! grep -q "indexedDB" experimental/canary_report_safe.js
+          ! grep -q "chatText" experimental/canary_report_core.js
+          ! grep -q "scopeKey" experimental/canary_report_core.js
+          grep -q "Deliberately no card name" experimental/canary_report_core.js
+          grep -q "复制诊断JSON" experimental/canary_report_safe.js
