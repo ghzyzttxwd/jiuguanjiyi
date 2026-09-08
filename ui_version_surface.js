@@ -2,7 +2,7 @@
 // Internal modules keep their own lineage versions; user-facing headers always show the installed plugin release.
 // No MutationObserver: patch a few times during startup, then stop.
 
-const FALLBACK_VERSION = '0.7.0';
+const FALLBACK_VERSION = '0.8.0';
 const MAX_ATTEMPTS = 20;
 const RETRY_MS = 750;
 
