@@ -27,7 +27,7 @@
         box.innerHTML = `
           <summary>🧪 统一自动记忆 RC 安全入口</summary>
           <div class="vab-note">
-            正常启动不会载入实验模块。只有你主动点击“加载统一主控RC”时，才载入最小Canary栈：冷档案Prompt召回 + 生命周期引擎 + 统一主控。旧智能托管、手动重激活、只读重激活工具不会被挂载，减少计时器、事件监听和相互干扰。所有自动开关仍默认关闭，重启后不会自动再次载入。
+            正常启动不会载入实验模块。只有你主动点击“加载统一主控RC”时，才载入最小Canary栈：冷档案Prompt召回 + 生命周期引擎 + 统一主控 + 被动诊断。旧智能托管、手动重激活、只读重激活工具不会被挂载，减少计时器、事件监听和相互干扰。所有自动开关仍默认关闭，重启后不会自动再次载入。
           </div>
           <div class="vab-actions">
             <button class="menu_button" data-vab-safe-load>加载统一主控RC</button>
@@ -59,6 +59,7 @@
             let recall = null;
             let autoLifecycle = null;
             let memoryMaster = null;
+            let canaryReport = null;
             try {
                 recall = await import('./experimental/recall_safe.js');
                 if (typeof recall.mountRecallSafe !== 'function') {
@@ -78,9 +79,16 @@
                 }
                 memoryMaster.mountMemoryMasterSafe();
 
-                loadedModules = { recall, autoLifecycle, memoryMaster };
-                statusText = '统一主控RC已载入；所有自动功能仍关闭。最上方“统一自动记忆主控”是唯一推荐总开关；主控只弹一次确认并直接调用子系统API。';
+                canaryReport = await import('./experimental/canary_report_safe.js');
+                if (typeof canaryReport.mountCanaryReportSafe !== 'function') {
+                    throw new Error('Canary诊断候选缺少 mountCanaryReportSafe()');
+                }
+                canaryReport.mountCanaryReportSafe();
+
+                loadedModules = { recall, autoLifecycle, memoryMaster, canaryReport };
+                statusText = '统一主控RC已载入；所有自动功能仍关闭。最上方“统一自动记忆主控”是唯一推荐总开关；Canary诊断只读，不包含聊天正文、角色名、变量内容或scope ID。';
             } catch (error) {
+                try { canaryReport?.unmountCanaryReportSafe?.(); } catch {}
                 try { await memoryMaster?.unmountMemoryMasterSafe?.(); } catch {}
                 try { autoLifecycle?.unmountAutoLifecycleSafe?.(); } catch {}
                 try { await recall?.unmountRecallSafe?.(); } catch {}
@@ -99,6 +107,7 @@
             statusText = '正在卸载统一主控RC…';
             sync();
             try {
+                loadedModules.canaryReport?.unmountCanaryReportSafe?.();
                 await loadedModules.memoryMaster?.unmountMemoryMasterSafe?.();
                 loadedModules.autoLifecycle?.unmountAutoLifecycleSafe?.();
                 await loadedModules.recall?.unmountRecallSafe?.();
