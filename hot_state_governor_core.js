@@ -45,12 +45,32 @@ function isObjectRecord(value) {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
-function isLikelyDynamicRecord(value) {
+const DYNAMIC_LABEL_RE = /(武学|技能|能力|功法|法术|秘籍|装备|道具|物品|背包|仓库|人物|角色|NPC|红颜|同伴|队友|伙伴|仇敌|敌人|势力|组织|队伍|任务列表|任务记录|事件|情报|档案|烙印|坐标|收藏|宠物)/i;
+const STATIC_LABEL_RE = /^(当前|状态|身份|元信息|系统|配置|设置|参数|基础|属性)$/;
+const HISTORY_LABEL_RE = /(经历|历史|事件|记录|日志|变化|轨迹|承诺|因果|秘密|战绩|里程碑)/;
+
+function isStrongDynamicPath(path) {
+  const label = pathLabel(path);
+  if (!label || STATIC_LABEL_RE.test(label)) return false;
+  return DYNAMIC_LABEL_RE.test(label);
+}
+
+function isLikelyDynamicRecord(value, path = '') {
   if (!isObjectRecord(value)) return false;
   const entries = Object.values(value);
-  if (entries.length < 4) return false;
   const structured = entries.filter(v => v && typeof v === 'object').length;
-  return structured / entries.length >= 0.5;
+  const ratio = entries.length ? structured / entries.length : 0;
+
+  // Semantic collection names are useful before a new card has accumulated many items.
+  // This lets /玩家/武学 with only 2 entries be governed immediately instead of waiting
+  // until the container is already large. Analysis-only mode makes this conservative hint safe.
+  if (isStrongDynamicPath(path)) {
+    if (entries.length === 0) return true;
+    return ratio >= 0.34 || entries.length >= 2;
+  }
+
+  if (entries.length < 4) return false;
+  return ratio >= 0.5;
 }
 
 function pointerJoin(base, key) {
@@ -114,45 +134,35 @@ export function discoverGenericPolicy(statData, { maxDepth = 4 } = {}) {
   const seenCollections = new Set();
   const seenHistories = new Set();
 
+  function addCollection(path, type) {
+    if (!path || seenCollections.has(path)) return;
+    seenCollections.add(path);
+    collectionPolicies.push({
+      path,
+      label: `${pathLabel(path)}（自动发现${type}）`,
+      softLimit: 12,
+      hardLimit: 24,
+      strategy: '通用自动发现：最近变更/最近提及/当前相关项优先；仅分析，不自动删除',
+      inferred: true,
+    });
+  }
+
   function walk(value, path, depth) {
     if (depth > maxDepth || value == null || typeof value !== 'object') return;
 
     if (Array.isArray(value)) {
-      if (value.length >= 8 && path) {
-        const key = path;
-        if (!seenCollections.has(key)) {
-          seenCollections.add(key);
-          collectionPolicies.push({
-            path,
-            label: `${pathLabel(path)}（自动发现数组）`,
-            softLimit: 12,
-            hardLimit: 24,
-            strategy: '通用自动发现：近期/当前相关项优先；仅分析，不自动删除',
-            inferred: true,
-          });
-        }
-      }
+      if (path && (value.length >= 8 || isStrongDynamicPath(path))) addCollection(path, '数组');
       return;
     }
 
-    if (path && isLikelyDynamicRecord(value)) {
-      const key = path;
-      if (!seenCollections.has(key)) {
-        seenCollections.add(key);
-        collectionPolicies.push({
-          path,
-          label: `${pathLabel(path)}（自动发现记录）`,
-          softLimit: 12,
-          hardLimit: 24,
-          strategy: '通用自动发现：最近变更/最近提及/当前相关项优先；仅分析，不自动删除',
-          inferred: true,
-        });
-      }
+    if (path && isLikelyDynamicRecord(value, path)) {
+      addCollection(path, '记录');
 
-      for (const [ownerKey, node] of Object.entries(value)) {
+      for (const node of Object.values(value)) {
         if (!isObjectRecord(node)) continue;
         for (const [fieldKey, fieldValue] of Object.entries(node)) {
-          if (!Array.isArray(fieldValue) || fieldValue.length < 6) continue;
+          if (!Array.isArray(fieldValue)) continue;
+          if (fieldValue.length < 6 && !HISTORY_LABEL_RE.test(fieldKey)) continue;
           const fieldPath = `/${escapePointerSegment(fieldKey)}`;
           const hKey = `${path}|${fieldPath}`;
           if (seenHistories.has(hKey)) continue;
