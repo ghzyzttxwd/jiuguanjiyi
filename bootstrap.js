@@ -1,5 +1,5 @@
-// Variable Archive Bridge v0.4.1 bootstrap
-// Universal MVU archive + recall + hot-state governance + self-update for variable cards.
+// Variable Archive Bridge v0.5.0 bootstrap
+// Universal MVU archive + recall + hot-state governance + warm catalog + self-update.
 
 import './index.js';
 import './mvu_recovery.js';
@@ -7,6 +7,7 @@ import './hot_archive_reconcile.js';
 import './smart_scan.js';
 import './production_auto.js';
 import './hot_state_governor.js';
+import './warm_catalog.js';
 import './self_update.js';
 
 (function installVabDrawerFix() {
@@ -31,7 +32,6 @@ import './self_update.js';
         const computedHidden = getComputedStyle(content).display === 'none';
         const inlineHidden = content.style.display === 'none';
         const isHidden = inlineHidden || computedHidden;
-
         content.style.display = isHidden ? 'block' : 'none';
 
         const icon = toggle.querySelector('.inline-drawer-icon');
@@ -43,8 +43,10 @@ import './self_update.js';
         if (isHidden) {
             if (toggle.closest('#vab-governor-settings')) {
                 Promise.resolve(window.VariableArchiveBridgeHotStateGovernor?.refresh?.()).catch(console.warn);
+                Promise.resolve(window.VariableArchiveBridgeWarmCatalog?.sync?.()).catch(console.warn);
             } else {
                 Promise.resolve(window.VariableArchiveBridgeMvuRecovery?.recover?.()).catch(console.warn);
+                Promise.resolve(window.VariableArchiveBridgeWarmCatalog?.sync?.()).catch(console.warn);
                 Promise.resolve(window.VariableArchiveBridgeSelfUpdate?.check?.()).catch(console.warn);
             }
         }
