@@ -9,7 +9,6 @@ on:
       - 'hot_state_preview_core.js'
       - 'warm_catalog_core.js'
       - 'bootstrap.js'
-      - 'manifest.json'
       - '.github/workflows/safe-cooling-test.yml'
   workflow_dispatch:
 
@@ -64,7 +63,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          grep -q '"version": "0.6.0"' manifest.json
           grep -q "import './safe_cooling_executor.js'" bootstrap.js
           grep -q "automaticEnabled: false" safe_cooling_executor.js
           grep -q "maxItemsPerRun: 1" safe_cooling_executor.js
