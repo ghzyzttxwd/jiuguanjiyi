@@ -48,7 +48,7 @@ jobs:
           grep -q "fail-closed" production_auto.js
           ! grep -q "new MutationObserver" production_auto.js bootstrap.js
           ! grep -q "restoreArchive" production_auto.js
-          grep -q "autoConservative: true" experimental/rehydration_transaction.js
+          grep -q "autoConservative: true" experimental/auto_lifecycle_safe.js
       - name: Import graph
         shell: bash
         run: |
