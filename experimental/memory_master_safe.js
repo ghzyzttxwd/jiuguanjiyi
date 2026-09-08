@@ -4,24 +4,30 @@ import {
   disableMasterStack,
   enableMasterStack,
 } from './memory_master_core.js';
-import { RecallSafeDiagnostics } from './recall_safe.js';
-import { AutoLifecycleSafeDiagnostics } from './auto_lifecycle_safe.js';
+import { RecallSafeDiagnostics, setRecallEnabledSession } from './recall_safe.js';
+import { AutoLifecycleSafeDiagnostics, setLifecycleEnabledSession } from './auto_lifecycle_safe.js';
 import { SmartHostSafeDiagnostics } from './smart_host_safe.js';
 import { RehydrationLiveSafeDiagnostics } from './rehydration_live_safe.js';
 import { summarizeLifecycleDecision } from './auto_lifecycle_core.js';
 
-const VERSION = '0.2.0-rc1';
+const VERSION = '0.2.0-rc2';
 const UI_INTERVAL_MS = 4000;
-const COMPONENT_WAIT_MS = 5000;
+const HEALTH_WATCHDOG_MS = 15000;
+const HEALTH_DEBOUNCE_MS = 650;
 
 let mounted = false;
 let masterEnabled = false; // session-only: never persisted
 let busy = false;
 let uiTimer = null;
 let healthTimer = null;
+let healthDebounceTimer = null;
+let eventBindings = [];
 let statusText = '未启用 · 召回/归档/重激活不会由主控自动运行';
 let lastPreflight = null;
 let lastHealth = null;
+let lastHealthAt = 0;
+let healthCheckCount = 0;
+let failClosedCount = 0;
 
 const LOCK_SELECTORS = [
   '[data-vab-recall-enabled]',
@@ -30,6 +36,14 @@ const LOCK_SELECTORS = [
   '[data-vab-rehydrate-arm]',
   '#vab-auto-archive-global',
 ];
+
+function ctx() {
+  try {
+    return window.SillyTavern?.getContext?.() || window.parent?.SillyTavern?.getContext?.() || null;
+  } catch {
+    return null;
+  }
+}
 
 function getVab() {
   return window.VariableArchiveBridge || window.parent?.VariableArchiveBridge || null;
@@ -43,10 +57,6 @@ function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, c => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
   }[c]));
-}
-
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 function setLocks(locked) {
@@ -68,43 +78,25 @@ function setLocks(locked) {
   }
 }
 
-async function waitFor(check, expected, timeoutMs = COMPONENT_WAIT_MS) {
-  const started = Date.now();
-  while (Date.now() - started < timeoutMs) {
-    if (!!check() === !!expected) return true;
-    await sleep(50);
-  }
-  return !!check() === !!expected;
-}
-
-async function driveToggle(selector, expected, check) {
-  if (!!check() === !!expected) return true;
-  const el = document.querySelector(selector);
-  if (!el) return false;
-  const wasDisabled = el.disabled;
-  el.disabled = false;
-  el.checked = !!expected;
-  el.dispatchEvent(new Event('change', { bubbles: true }));
-  const ok = await waitFor(check, expected);
-  if (!masterEnabled) el.disabled = wasDisabled;
-  return ok;
-}
-
 async function enableRecall() {
-  return driveToggle('[data-vab-recall-enabled]', true, () => RecallSafeDiagnostics.isEnabled());
+  await setRecallEnabledSession(true);
+  return RecallSafeDiagnostics.isEnabled();
 }
 
 async function disableRecall() {
-  return driveToggle('[data-vab-recall-enabled]', false, () => RecallSafeDiagnostics.isEnabled());
+  await setRecallEnabledSession(false);
+  return !RecallSafeDiagnostics.isEnabled();
 }
 
 async function enableLifecycle() {
-  // This delegated toggle keeps the existing lifecycle confirmation dialog.
-  return driveToggle('[data-vab-lifecycle-enable]', true, () => AutoLifecycleSafeDiagnostics.isEnabled());
+  // Master owns the one user confirmation. Child confirmation is deliberately skipped here.
+  await setLifecycleEnabledSession(true, { skipConfirm: true });
+  return AutoLifecycleSafeDiagnostics.isEnabled();
 }
 
 async function disableLifecycle() {
-  return driveToggle('[data-vab-lifecycle-enable]', false, () => AutoLifecycleSafeDiagnostics.isEnabled());
+  await setLifecycleEnabledSession(false, { skipConfirm: true });
+  return !AutoLifecycleSafeDiagnostics.isEnabled();
 }
 
 function currentPreflight() {
@@ -154,7 +146,24 @@ async function enableMaster() {
       return;
     }
 
-    statusText = '正在开启统一主控：先启用Prompt召回，再进入生命周期托管确认…';
+    const ok = confirm([
+      '开启“统一自动记忆主控”候选版？',
+      '',
+      '仅本次页面会话有效，刷新/重启后自动关闭。',
+      '开启后由一个主控同时协调：',
+      '1. 冷档案按需Prompt召回；',
+      '2. 热变量超载后安全归档；',
+      '3. 归档节点真正重新进入MVU后事务重激活。',
+      '',
+      '生成期间不写；聊天切换首轮不写；每次最多改1个MVU节点；异常会熔断并联动关闭。',
+      '单纯提到旧人物/武学只召回上下文，不会硬恢复MVU。',
+    ].join('\n'));
+    if (!ok) {
+      statusText = '未开启 · 用户取消本次会话主控';
+      return;
+    }
+
+    statusText = '正在开启统一主控：先启用Prompt召回，再启用生命周期托管…';
     updateUi();
 
     const result = await enableMasterStack({
@@ -169,6 +178,7 @@ async function enableMaster() {
     if (masterEnabled) {
       setLocks(true);
       statusText = '✅ 统一自动记忆主控已开启 · session-only · Prompt召回 + 热冷归档 + 重激活收口由一个主控协调';
+      scheduleHealthCheck(HEALTH_DEBOUNCE_MS);
     } else {
       setLocks(false);
       statusText = `未开启：${result.reason}${result.rolledBack ? ' · 已回滚先前开启的子系统' : ''}`;
@@ -182,10 +192,11 @@ async function enableMaster() {
 async function disableMaster({ reason = '用户关闭主控' } = {}) {
   if (busy) return;
   busy = true;
+  masterEnabled = false;
   setLocks(false);
+  clearScheduledHealth();
   try {
     const result = await disableMasterStack({ disableRecall, disableLifecycle });
-    masterEnabled = false;
     statusText = result.ok
       ? `○ 统一自动记忆主控已关闭 · ${reason} · 本插件拥有的召回Prompt已清理`
       : `⚠️ 主控已请求关闭，但子系统关闭异常：${result.errors.join('；')}`;
@@ -197,6 +208,8 @@ async function disableMaster({ reason = '用户关闭主控' } = {}) {
 
 async function healthCheck() {
   if (!mounted || !masterEnabled || busy) return;
+  healthCheckCount++;
+  lastHealthAt = Date.now();
   const health = assessMasterHealth({
     masterEnabled,
     recallEnabled: RecallSafeDiagnostics.isEnabled(),
@@ -206,16 +219,65 @@ async function healthCheck() {
 
   const preflight = currentPreflight();
   if (!preflight.ok) {
+    failClosedCount++;
     await disableMaster({ reason: `运行中安全条件失效：${preflight.reason}` });
     return;
   }
   if (!health.healthy && health.action === 'fail-closed') {
+    failClosedCount++;
     await disableMaster({ reason: `故障联动：${health.reason}` });
   }
 }
 
+function clearScheduledHealth() {
+  if (healthDebounceTimer) clearTimeout(healthDebounceTimer);
+  healthDebounceTimer = null;
+}
+
+function scheduleHealthCheck(delay = HEALTH_DEBOUNCE_MS) {
+  clearScheduledHealth();
+  if (!mounted || !masterEnabled) return;
+  healthDebounceTimer = setTimeout(() => {
+    healthDebounceTimer = null;
+    healthCheck().catch(error => console.warn('[VAB Memory Master RC] event health check failed', error));
+  }, Math.max(100, Number(delay) || HEALTH_DEBOUNCE_MS));
+}
+
+function bindEvent(name, handler) {
+  const c = ctx();
+  const source = c?.eventSource;
+  if (!name || !source?.on) return;
+  source.on(name, handler);
+  eventBindings.push({ source, name, handler });
+}
+
+function hookEvents() {
+  if (eventBindings.length) return;
+  const e = ctx()?.event_types || ctx()?.eventTypes || {};
+  const stable = () => scheduleHealthCheck();
+  bindEvent(e.GENERATION_STOPPED, stable);
+  bindEvent(e.GENERATION_ENDED, stable);
+  bindEvent(e.CHARACTER_MESSAGE_RENDERED, stable);
+  bindEvent(e.MESSAGE_RECEIVED, stable);
+  bindEvent(e.MESSAGE_UPDATED, stable);
+  bindEvent(e.CHAT_CHANGED, stable);
+}
+
+function unhookEvents() {
+  for (const { source, name, handler } of eventBindings) {
+    try { source?.removeListener?.(name, handler); } catch {}
+  }
+  eventBindings = [];
+}
+
+function uiHost() {
+  return document.querySelector('#vab-rc-host')
+    || document.querySelector('#vab-smart-host-safe')
+    || document.querySelector('#vab-settings #vab-root');
+}
+
 function ensureUi() {
-  const host = document.querySelector('#vab-smart-host-safe');
+  const host = uiHost();
   if (!host) return;
   if (host.querySelector('#vab-memory-master-safe')) {
     updateUi();
@@ -228,10 +290,10 @@ function ensureUi() {
   box.open = true;
   box.innerHTML = `
     <summary>🧠📦 统一自动记忆主控 ${VERSION}</summary>
-    <div class="vab-note">目标形态：日常只保留这一个总开关。开启后统一协调：①冷档案按需Prompt召回；②热变量超载时自动归档；③归档节点真正重新进入MVU时事务重激活。单纯“提到旧人物/武学”只召回，不硬恢复MVU。</div>
+    <div class="vab-note">RC2：日常只保留这一个总开关。主控直接调用子系统API，不再模拟点击内部开关；开启时只弹一次总确认。统一协调：①冷档案按需Prompt召回；②热变量超载自动归档；③归档节点真正重新进入MVU时事务重激活。</div>
     <label class="checkbox_label"><input type="checkbox" data-vab-master-enable> 本次页面会话启用统一自动记忆（实验RC）</label>
     <div class="vab-actions"><button class="menu_button" data-vab-master-preview>统一安全预检</button></div>
-    <div class="vab-note">主控本身不持久化。开启时仍沿用生命周期模块现有的确认框；若召回层因Prompt冲突退出、生命周期层熔断，或旧自动引擎/手动写入被重新开启，主控会 fail-closed：联动关闭全部自动功能。</div>
+    <div class="vab-note">保护：主控不持久化；事件触发健康检查 + 15秒低频看门狗；召回层退出、生命周期熔断、旧自动引擎/手动写入重新开启时一律 fail-closed，先停写入再清理本插件Prompt。</div>
     <div class="vab-note" data-vab-master-status>○ ${escapeHtml(statusText)}</div>`;
 
   host.prepend(box);
@@ -259,20 +321,23 @@ export function mountMemoryMasterSafe() {
   masterEnabled = false;
   busy = false;
   statusText = '未启用 · 召回/归档/重激活不会由主控自动运行';
+  hookEvents();
   ensureUi();
   uiTimer = setInterval(ensureUi, UI_INTERVAL_MS);
-  healthTimer = setInterval(() => healthCheck().catch(error => {
-    console.warn('[VAB Memory Master RC] health check failed', error);
-  }), UI_INTERVAL_MS);
+  healthTimer = setInterval(() => {
+    healthCheck().catch(error => console.warn('[VAB Memory Master RC] watchdog health check failed', error));
+  }, HEALTH_WATCHDOG_MS);
 }
 
 export async function unmountMemoryMasterSafe() {
   if (masterEnabled) await disableMaster({ reason: '候选模块卸载' });
   setLocks(false);
+  clearScheduledHealth();
   if (uiTimer) clearInterval(uiTimer);
   if (healthTimer) clearInterval(healthTimer);
   uiTimer = null;
   healthTimer = null;
+  unhookEvents();
   document.querySelector('#vab-memory-master-safe')?.remove();
   masterEnabled = false;
   busy = false;
@@ -285,5 +350,17 @@ export const MemoryMasterSafeDiagnostics = {
   getStatus: () => statusText,
   getPreflight: () => lastPreflight,
   getHealth: () => lastHealth,
+  getRuntime: () => ({
+    mounted,
+    masterEnabled,
+    busy,
+    eventBindings: eventBindings.length,
+    healthScheduled: !!healthDebounceTimer,
+    lastHealthAt,
+    healthCheckCount,
+    failClosedCount,
+  }),
   preview: previewAll,
+  enable: enableMaster,
+  disable: disableMaster,
 };
