@@ -1,0 +1,77 @@
+name: VAB Production v0.2 Tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'production_auto.js'
+      - 'bootstrap.js'
+      - 'manifest.json'
+      - 'experimental/**'
+      - '.github/workflows/production-v020-test.yml'
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Treat JS as ES modules
+        run: printf '{"type":"module"}\n' > package.json
+      - name: Syntax
+        run: |
+          node --check bootstrap.js
+          node --check production_auto.js
+          node --check experimental/boot_guard_core.js
+          node --check experimental/recall_safe.js
+          node --check experimental/auto_lifecycle_safe.js
+          node --check experimental/rehydration_transaction.js
+      - name: Production safety invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q "import './production_auto.js'" bootstrap.js
+          grep -q '"version": "0.2.0"' manifest.json
+          grep -q '"auto_update": true' manifest.json
+          grep -q "START_DELAY_MS = 4500" production_auto.js
+          grep -q "decideAutoStart" production_auto.js
+          grep -q "beginBoot" production_auto.js
+          grep -q "markBootHealthy" production_auto.js
+          grep -q "markBootFailed" production_auto.js
+          grep -q "setRecallEnabledSession(true)" production_auto.js
+          grep -q "setLifecycleEnabledSession(true, { skipConfirm: true })" production_auto.js
+          grep -q "HEALTH_WATCHDOG_MS = 15000" production_auto.js
+          grep -q "fail-closed" production_auto.js
+          ! grep -q "new MutationObserver" production_auto.js bootstrap.js
+          ! grep -q "restoreArchive" production_auto.js
+          grep -q "autoConservative: true" experimental/rehydration_transaction.js
+      - name: Import graph
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import pathlib, re, sys
+          roots = [pathlib.Path('bootstrap.js'), pathlib.Path('production_auto.js')]
+          seen=set(); missing=[]
+          while roots:
+              p=roots.pop()
+              if p in seen or not p.exists():
+                  continue
+              seen.add(p)
+              text=p.read_text(encoding='utf-8')
+              for rel in re.findall(r"(?:from\s+|import\s*\()['\"](\./[^'\"]+)['\"]", text):
+                  q=(p.parent/rel).resolve()
+                  try: rq=q.relative_to(pathlib.Path.cwd().resolve())
+                  except Exception: continue
+                  if q.suffix=='' and not q.exists() and q.with_suffix('.js').exists():
+                      q=q.with_suffix('.js'); rq=q.relative_to(pathlib.Path.cwd().resolve())
+                  if not q.exists(): missing.append(f'{p} -> {rel}')
+                  elif q.suffix=='.js': roots.append(rq)
+          if missing:
+              print('\n'.join(missing)); sys.exit(1)
+          print(f'import graph ok: {len(seen)} files')
+          PY
