@@ -1,11 +1,11 @@
-// Variable Archive Bridge v0.3.5 self-update surface.
+// Variable Archive Bridge v0.4.0 self-update surface.
 // Mirrors Tavern Helper's user experience: automatically checks its own remote manifest,
 // shows a Chinese "更新" button inside its own settings, and updates without requiring
 // the user to open SillyTavern's extension manager.
 
 import { hasNewerVersion, chooseUpdatePath } from './self_update_core.js';
 
-const CURRENT_VERSION = '0.3.5';
+const CURRENT_VERSION = '0.4.0';
 const EXTENSION_ID = 'jiuguanjiyi';
 const REPO_URL = 'https://github.com/ghzyzttxwd/jiuguanjiyi';
 const REMOTE_MANIFEST = 'https://raw.githubusercontent.com/ghzyzttxwd/jiuguanjiyi/main/manifest.json';
