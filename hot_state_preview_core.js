@@ -151,6 +151,7 @@ export function buildCoolingPreview(statData, analysis, {
       count: entries.length,
       softLimit: row.softLimit,
       hardLimit: row.hardLimit,
+      level: row.level,
       kept: scored.filter(x => keepKeys.has(x.key)),
       cooling,
       coolingBytes,
@@ -178,6 +179,10 @@ export function buildCoolingPreview(statData, analysis, {
       label: row.label,
       count: arr.length,
       keep: row.softLimit,
+      softLimit: row.softLimit,
+      hardLimit: row.hardLimit,
+      level: row.level,
+      inferred: row.inferred === true,
       candidateCount: excess,
       bytes,
     });
