@@ -1,6 +1,6 @@
 /*
  * Variable Archive Bridge / 变量归档桥
- * v0.1.1
+ * v0.2.0
  *
  * Goal:
  *   Keep MVU stat_data small by moving cold child nodes out of user-designated
@@ -8,16 +8,17 @@
  *   st-memory-enhancement mirroring, and an on-demand macro for prompt injection.
  *
  * Safety defaults:
- *   - auto archive OFF
+ *   - legacy per-container auto archive OFF
  *   - memory mirror OFF
- *   - only direct children of explicitly configured archive containers can be removed
+ *   - only direct children of explicitly configured archive containers can be removed by legacy manual tools
  *   - a full MVU snapshot is taken before every archive operation
+ *   - v0.2 automatic lifecycle is coordinated separately by production_auto.js
  */
 
 const VAB = (() => {
     'use strict';
 
-    const VERSION = '0.1.1';
+    const VERSION = '0.2.0';
     const DB_NAME = 'variable_archive_bridge';
     const DB_VERSION = 1;
     const SETTINGS_KEY = 'vab.settings.v1';
