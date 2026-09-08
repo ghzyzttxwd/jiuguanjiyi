@@ -1,4 +1,4 @@
-name: VAB Production v0.2 Tests
+name: VAB Production v0.3 Tests
 
 on:
   push:
@@ -8,6 +8,8 @@ on:
       - 'bootstrap.js'
       - 'hot_archive_reconcile.js'
       - 'hot_archive_reconcile_core.js'
+      - 'hot_state_governor.js'
+      - 'hot_state_governor_core.js'
       - 'manifest.json'
       - 'experimental/**'
       - '.github/workflows/production-v020-test.yml'
@@ -29,6 +31,8 @@ jobs:
           node --check bootstrap.js
           node --check hot_archive_reconcile.js
           node --check hot_archive_reconcile_core.js
+          node --check hot_state_governor.js
+          node --check hot_state_governor_core.js
           node --check production_auto.js
           node --check experimental/boot_guard_core.js
           node --check experimental/recall_safe.js
@@ -67,6 +71,32 @@ jobs:
           if (wrongScope.length !== 0) throw new Error('cross-scope archive must not be touched');
           console.log('hot archive reconcile behavior ok');
           JS
+      - name: Hot state governor behavior
+        run: |
+          node --input-type=module <<'JS'
+          import { analyzeHotState, detectMainGod } from './hot_state_governor_core.js';
+          const abilities = {};
+          for (let i = 0; i < 13; i++) abilities[`能力${i}`] = { 名称: `能力${i}` };
+          const statData = {
+            玩家: { 能力: abilities, 装备: {} },
+            轮回残印: { 解析档案: {}, 世界烙印: {} },
+            当前轮回: { 轮次: 1 },
+            当前世界: { 重要人物: {}, 重要势力: {}, 重大事件: {}, 玩家已知情报: {} },
+            长期人物: { 小龙女: { 是否同行: true, 共同经历: Array(9).fill('x'), 与玩家关系: { 关键关系事件: Array(6).fill('x') } } },
+            轮回者生态: { 轮回队: {}, 重要轮回者: {}, 已知组织: {} },
+            资源: { 世界坐标: {} },
+            世界档案: {},
+          };
+          if (!detectMainGod(statData)) throw new Error('main-god profile was not detected');
+          const report = analyzeHotState(statData);
+          const ability = report.collections.find(x => x.path === '/玩家/能力');
+          if (!ability || ability.level !== 'warn' || ability.excess !== 1) throw new Error('ability budget analysis failed');
+          const longPerson = report.collections.find(x => x.path === '/长期人物');
+          if (!longPerson || longPerson.protectedCount !== 1) throw new Error('同行 protection analysis failed');
+          if (report.histories.length !== 2) throw new Error(`expected 2 internal-history warnings, got ${report.histories.length}`);
+          if (report.readOnly !== true) throw new Error('governor must remain read-only');
+          console.log('hot state governor behavior ok');
+          JS
       - name: One-time archive selector behavior
         run: |
           node --input-type=module <<'JS'
@@ -100,8 +130,9 @@ jobs:
           set -euo pipefail
           grep -q "import './hot_archive_reconcile.js'" bootstrap.js
           grep -q "import './production_auto.js'" bootstrap.js
+          grep -q "import './hot_state_governor.js'" bootstrap.js
           ! grep -q "lifecycle_watchdog.js" bootstrap.js
-          grep -q '"version": "0.2.2"' manifest.json
+          grep -q '"version": "0.3.0"' manifest.json
           grep -q '"auto_update": true' manifest.json
           grep -q "selectHotArchiveMatches" hot_archive_reconcile.js
           grep -q "core-hot-presence-reconcile" hot_archive_reconcile.js
@@ -111,7 +142,11 @@ jobs:
           grep -q "MIN_OBSERVATIONS = 2" hot_archive_reconcile.js
           ! grep -q "wrappedRefresh" hot_archive_reconcile.js
           ! grep -q "replaceMvuData" hot_archive_reconcile.js
-          ! grep -q "new MutationObserver" hot_archive_reconcile.js bootstrap.js production_auto.js
+          ! grep -q "replaceMvuData\|archiveChild\|restoreArchive\|putArchive" hot_state_governor.js
+          grep -q "readOnly: true" hot_state_governor_core.js
+          grep -q "MAIN_GOD_COLLECTION_POLICIES" hot_state_governor_core.js
+          grep -q "MAIN_GOD_HISTORY_POLICIES" hot_state_governor_core.js
+          ! grep -q "new MutationObserver" hot_archive_reconcile.js bootstrap.js production_auto.js hot_state_governor.js
           grep -q "START_DELAY_MS = 4500" production_auto.js
           grep -q "decideAutoStart" production_auto.js
           grep -q "beginBoot" production_auto.js
