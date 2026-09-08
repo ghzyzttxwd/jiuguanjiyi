@@ -1,9 +1,10 @@
-// Variable Archive Bridge v0.3.0 Hot State Governor — analysis-only phase.
+// Variable Archive Bridge v0.3.1 Hot State Governor — universal analysis-only phase.
 // Reads current MVU and reports growth pressure. It never writes MVU, archives, or prompts.
+// Card-specific policies are optional adapters; cards without one use conservative generic discovery.
 
 import { analyzeHotState } from './hot_state_governor_core.js';
 
-const VERSION = '0.3.0';
+const VERSION = '0.3.1';
 const PANEL_ID = 'vab-governor-settings';
 const REFRESH_MS = 5000;
 let lastReport = null;
@@ -14,6 +15,27 @@ let running = false;
 function vab() {
   try {
     return window.VariableArchiveBridge || window.parent?.VariableArchiveBridge || null;
+  } catch {
+    return null;
+  }
+}
+
+function ctx() {
+  try {
+    return window.SillyTavern?.getContext?.() || window.parent?.SillyTavern?.getContext?.() || null;
+  } catch {
+    return null;
+  }
+}
+
+function readCardPolicy() {
+  try {
+    const c = ctx();
+    if (!c || c.groupId) return null;
+    const ch = c.characters?.[c.characterId];
+    const ext = ch?.data?.extensions || ch?.extensions || null;
+    const policy = ext?.variable_archive_bridge_policy || ext?.vab_policy || null;
+    return policy && typeof policy === 'object' ? policy : null;
   } catch {
     return null;
   }
@@ -36,6 +58,12 @@ function levelText(level) {
   return '🟢 正常';
 }
 
+function sourceText(source) {
+  if (source === 'card') return '角色卡自带策略';
+  if (source === 'builtin-profile') return '已识别适配策略';
+  return '通用自动发现';
+}
+
 function hostNode() {
   return document.querySelector('#extensions_settings2') || document.querySelector('#extensions_settings') || document.body;
 }
@@ -49,7 +77,7 @@ function ensurePanel() {
   wrap.innerHTML = `
     <div class="inline-drawer vab-governor-drawer">
       <div class="inline-drawer-toggle inline-drawer-header vab-governor-header">
-        <b>🧠 热变量治理 <small>v${VERSION} · 只分析</small></b>
+        <b>🧠 热变量治理 <small>v${VERSION} · 通用只分析</small></b>
         <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
       </div>
       <div class="inline-drawer-content vab-governor-content" style="display:none">
@@ -83,7 +111,7 @@ function render() {
     return;
   }
 
-  const { summary, collections, histories, profile } = lastReport;
+  const { summary, collections, histories, profileLabel, policySource } = lastReport;
   const problemRows = collections.filter(x => x.level !== 'ok');
   const collectionHtml = collections.map(row => `
     <div class="vab-governor-row ${row.level}">
@@ -102,16 +130,16 @@ function render() {
   root.innerHTML = `
     <div class="vab-status-row">
       <span class="vab-badge ok">● 只读分析</span>
-      <span class="vab-badge ${profile === 'main-god-v1' ? 'ok' : 'off'}">${profile === 'main-god-v1' ? '●' : '○'} ${profile === 'main-god-v1' ? '主神空间策略已识别' : '通用模式'}</span>
+      <span class="vab-badge ok">● ${esc(sourceText(policySource))}</span>
     </div>
-    <div class="vab-note"><b>本阶段绝不删除、归档或改写任何MVU变量。</b> 只告诉你哪里会在长局里膨胀。</div>
+    <div class="vab-note"><b>这是变量卡通用治理器，不是主神空间专属。</b> 当前策略：${esc(profileLabel || '通用自动发现')}。本阶段绝不删除、归档或改写任何MVU变量。</div>
     <div class="vab-actions"><button class="menu_button vab-governor-refresh">刷新分析</button></div>
     <div class="vab-governor-summary">
       stat_data：${fmtBytes(summary.totalStatBytes)} · 超硬上限 ${summary.hard} 组 · 超软上限 ${summary.warn} 组 · 估算可降温/历史化 ${summary.candidateCount} 项
     </div>
     <details class="vab-section" ${problemRows.length ? 'open' : ''}>
       <summary>集合热区预算（${collections.length}）</summary>
-      ${collectionHtml || '<div class="vab-note">当前卡未命中治理路径。</div>'}
+      ${collectionHtml || '<div class="vab-note">当前没有命中已知策略；通用自动发现也未发现明显动态集合。</div>'}
     </details>
     <details class="vab-section" ${histories.length ? 'open' : ''}>
       <summary>活跃对象内部历史（${histories.length}）</summary>
@@ -131,7 +159,7 @@ export async function refreshReport() {
     const state = core.getState();
     const statData = state?.latestMvu?.statData;
     if (!statData) throw new Error('当前聊天还没有可读取的 MVU stat_data');
-    lastReport = analyzeHotState(statData);
+    lastReport = analyzeHotState(statData, { externalPolicy: readCardPolicy() });
     lastError = '';
     render();
     return lastReport;
@@ -161,5 +189,5 @@ window.VariableArchiveBridgeHotStateGovernor = {
   VERSION,
   refresh: refreshReport,
   getReport: () => lastReport ? structuredClone(lastReport) : null,
-  getStatus: () => ({ running, lastError, hasReport: !!lastReport, readOnly: true }),
+  getStatus: () => ({ running, lastError, hasReport: !!lastReport, readOnly: true, universal: true }),
 };
