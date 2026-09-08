@@ -181,7 +181,6 @@ function observeAppendEvidence(scopeKey, preview, statData) {
     scope[path] = { ...sampleArray(arr), evidence, seenAt: messageCount() };
     scores[path] = evidence;
   }
-  // Bound local metadata per scope.
   const keys = Object.keys(scope);
   if (keys.length > 80) {
     keys.sort((a, b) => Number(scope[b]?.seenAt || 0) - Number(scope[a]?.seenAt || 0));
@@ -292,19 +291,6 @@ async function writeMvu(messageId, variables) {
   await mvu.replaceMvuData(variables, { type: 'message', message_id: messageId });
 }
 
-async function rollbackTargetArray(plan, originalArray) {
-  const state = await stableState();
-  const vars = deepClone(state.latestMvu.variables);
-  const stat = deepClone(state.latestMvu.statData);
-  setByPointer(stat, plan.arrayPath, deepClone(originalArray));
-  vars.stat_data = stat;
-  await writeMvu(state.latestMvu.messageId, vars);
-  await new Promise(r => setTimeout(r, 80));
-  const verify = await stableState();
-  const current = getByPointer(verify.latestMvu.statData, plan.arrayPath);
-  return Array.isArray(current) && hashValue(current) === hashValue(originalArray);
-}
-
 export async function executeOneHistoryCompaction({ forceCooldown = false } = {}) {
   if (busy) return { status: 'hold', reason: '已有历史压缩事务正在执行' };
   busy = true;
@@ -393,17 +379,26 @@ export async function executeOneHistoryCompaction({ forceCooldown = false } = {}
     const after = await stableState();
     const post = validateHistoryPost(plan, after.latestMvu.statData);
     if (!post.ok) {
-      let rolledBack = false;
-      try { rolledBack = await rollbackTargetArray(plan, originalArray); } catch {}
-      if (rolledBack) {
+      const currentArray = getByPointer(after.latestMvu.statData, plan.arrayPath);
+      const unchanged = Array.isArray(currentArray) && hashValue(currentArray) === hashValue(originalArray);
+      if (unchanged) {
+        // Our write did not take effect. Nothing was removed, so discard the pending copy and stop.
         await deleteArchive(id).catch(() => {});
-        throw new Error(`历史压缩后校验失败，已自动回滚：${post.reason}`);
+        throw new Error(`历史压缩写入未生效，热变量保持原样：${post.reason}`);
       }
-      // Worst-case safety: keep the complete removed segment available in cold storage instead of risking loss.
+
+      // Do NOT "rollback" by overwriting a changed array: another updater may have appended/edited
+      // history after our write. Preserve the complete removed prefix in cold storage and fail closed.
       archiveRecord.status = 'archived';
-      archiveRecord.historyMeta = { ...archiveRecord.historyMeta, verified: false, recoveryRequired: true, verifyError: post.reason };
+      archiveRecord.historyMeta = {
+        ...archiveRecord.historyMeta,
+        verified: false,
+        recoveryRequired: true,
+        concurrentChangeDetected: true,
+        verifyError: post.reason,
+      };
       await putArchive(archiveRecord);
-      throw new Error(`历史压缩后校验失败且自动回滚未确认；冷副本已保留并触发安全停机：${post.reason}`);
+      throw new Error(`历史压缩后检测到并发变化；为避免覆盖新剧情，未回写旧数组，冷副本已保留并触发安全停机：${post.reason}`);
     }
 
     archiveRecord.status = 'archived';
