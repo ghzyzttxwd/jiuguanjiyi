@@ -1,4 +1,4 @@
-// Variable Archive Bridge v0.6.0 bootstrap
+// Variable Archive Bridge v0.6.1 bootstrap
 // Universal MVU archive + recall + hot-state governance + warm catalog + safe cooling + self-update.
 
 import './macro_mux.js';
@@ -11,6 +11,7 @@ import './hot_state_governor.js';
 import './warm_catalog.js';
 import './safe_cooling_executor.js';
 import './self_update.js';
+import './ui_version_surface.js';
 
 (function installVabDrawerFix() {
     if (window.__VAB_DRAWER_FIX_INSTALLED__) return;
@@ -51,6 +52,7 @@ import './self_update.js';
                 Promise.resolve(window.VariableArchiveBridgeWarmCatalog?.sync?.()).catch(console.warn);
                 Promise.resolve(window.VariableArchiveBridgeSelfUpdate?.check?.()).catch(console.warn);
             }
+            Promise.resolve(window.VariableArchiveBridgeUiVersion?.patch?.()).catch(console.warn);
         }
     }, true);
 })();
