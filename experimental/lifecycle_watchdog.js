@@ -23,7 +23,7 @@ let running = false;
 let observation = null;
 let lastSuccessAt = 0;
 let lastPointer = '';
-let lastResult = '';
+let lastResult = '等待首次扫描';
 let lastError = '';
 let lastScanAt = 0;
 
@@ -51,6 +51,22 @@ function lifecycleReady() {
   } catch {
     return false;
   }
+}
+
+function renderStatus() {
+  const box = document.querySelector('#vab-production-auto');
+  if (!box) return;
+  let line = box.querySelector('[data-vab-reactivation-guard]');
+  if (!line) {
+    line = document.createElement('div');
+    line.className = 'vab-note';
+    line.setAttribute('data-vab-reactivation-guard', '');
+    const testStatus = box.querySelector('[data-vab-prod-test-status]');
+    if (testStatus?.parentNode) testStatus.parentNode.insertBefore(line, testStatus.nextSibling);
+    else box.appendChild(line);
+  }
+  const prefix = lastError ? '⚠' : lastSuccessAt ? '✅' : '◉';
+  line.textContent = `${prefix} 重激活守卫：${lastError || lastResult}`;
 }
 
 function resetObservation() {
@@ -109,9 +125,20 @@ async function tick() {
 
   if (running || document.hidden) return;
   const prod = productionStatus();
-  if (!prod?.active || prod?.blocked || prod?.faulted) return;
-  if (!lifecycleReady()) return;
-  if (lastSuccessAt && now - lastSuccessAt < SUCCESS_COOLDOWN_MS) return;
+  if (!prod?.active || prod?.blocked || prod?.faulted) {
+    lastResult = '自动记忆主控尚未处于运行状态';
+    renderStatus();
+    return;
+  }
+  if (!lifecycleReady()) {
+    lastResult = '生命周期层暂不可执行（忙碌/生成中/未启用）';
+    renderStatus();
+    return;
+  }
+  if (lastSuccessAt && now - lastSuccessAt < SUCCESS_COOLDOWN_MS) {
+    renderStatus();
+    return;
+  }
 
   running = true;
   try {
@@ -123,14 +150,14 @@ async function tick() {
     }
 
     if (!scanned.archives.length) {
-      lastResult = '当前没有冷归档';
+      lastResult = '当前没有待收口冷归档';
       resetObservation();
       return;
     }
 
     const plan = scanned.plan;
     if (!plan?.pointer || !plan?.record?.id) {
-      lastResult = `冷归档${scanned.archives.length}条，但没有节点重新进入热MVU`;
+      lastResult = `有${scanned.archives.length}条冷归档，但对应节点尚未重新进入热MVU`;
       resetObservation();
       return;
     }
@@ -138,7 +165,7 @@ async function tick() {
     lastPointer = plan.pointer;
     const stable = observe(plan, now);
     if (!stable) {
-      lastResult = `检测到重激活候选 ${plan.pointer} · 稳定确认 ${observation?.count || 1}/${MIN_OBSERVATIONS}`;
+      lastResult = `检测到 ${plan.pointer} · 稳定确认 ${observation?.count || 1}/${MIN_OBSERVATIONS}`;
       return;
     }
 
@@ -147,9 +174,6 @@ async function tick() {
       return;
     }
 
-    // Use the existing transaction. In automatic conservative mode it does not resurrect
-    // cold-only fields. For object changes it simply closes the old cold version while the
-    // current hot node remains authoritative.
     const io = createRehydrationLiveIo();
     const result = await executeRehydrationTransaction(io, plan.record.id, {
       autoConservative: true,
@@ -164,7 +188,6 @@ async function tick() {
       lastSuccessAt = Date.now();
       resetObservation();
     } else if (result?.status === 'noop') {
-      // Another guarded path may have completed the same record first. Refresh next pass.
       resetObservation();
     }
   } catch (error) {
@@ -174,11 +197,13 @@ async function tick() {
     console.warn('[VAB Reactivation Recovery]', error);
   } finally {
     running = false;
+    renderStatus();
   }
 }
 
 function start() {
   if (timer) return;
+  renderStatus();
   tick().catch(() => {});
   timer = setInterval(() => tick().catch(() => {}), POLL_MS);
 }
