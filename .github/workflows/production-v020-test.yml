@@ -45,84 +45,70 @@ jobs:
           node --input-type=module <<'JS'
           import { selectHotArchiveMatches } from './hot_archive_reconcile_core.js';
           const scopeKey = 'card_x:chat_y';
-          const archived = {
-            id: 'arc_1',
-            scopeKey,
-            status: 'archived',
-            pointer: '/人物/佟佳氏',
-            childKey: '佟佳氏',
-            sourcePath: '/人物',
-          };
-          const unrelated = {
-            id: 'arc_2',
-            scopeKey,
-            status: 'archived',
-            pointer: '/人物/毛东珠',
-            childKey: '毛东珠',
-            sourcePath: '/人物',
-          };
+          const archived = { id:'arc_1', scopeKey, status:'archived', pointer:'/人物/佟佳氏', childKey:'佟佳氏', sourcePath:'/人物' };
+          const unrelated = { id:'arc_2', scopeKey, status:'archived', pointer:'/人物/毛东珠', childKey:'毛东珠', sourcePath:'/人物' };
           const hot = { 人物: { 佟佳氏: { 好感: 80 } } };
-          const matches = selectHotArchiveMatches({ archives: [archived, unrelated], statData: hot, scopeKey });
-          if (matches.length !== 1) throw new Error(`expected 1 hot match, got ${matches.length}`);
-          if (matches[0].pointer !== '/人物/佟佳氏') throw new Error(`wrong match ${matches[0].pointer}`);
-          const absent = selectHotArchiveMatches({ archives: [archived], statData: { 人物: {} }, scopeKey });
-          if (absent.length !== 0) throw new Error('cold-only record must not be closed');
-          const wrongScope = selectHotArchiveMatches({ archives: [archived], statData: hot, scopeKey: 'other' });
-          if (wrongScope.length !== 0) throw new Error('cross-scope archive must not be touched');
+          const matches = selectHotArchiveMatches({ archives:[archived, unrelated], statData:hot, scopeKey });
+          if (matches.length !== 1 || matches[0].pointer !== '/人物/佟佳氏') throw new Error('hot reconcile failed');
+          if (selectHotArchiveMatches({ archives:[archived], statData:{人物:{}}, scopeKey }).length) throw new Error('cold-only record must not be closed');
+          if (selectHotArchiveMatches({ archives:[archived], statData:hot, scopeKey:'other' }).length) throw new Error('cross-scope archive must not be touched');
           console.log('hot archive reconcile behavior ok');
           JS
-      - name: Hot state governor behavior
+      - name: Universal hot-state governor behavior
         run: |
           node --input-type=module <<'JS'
-          import { analyzeHotState, detectMainGod } from './hot_state_governor_core.js';
+          import { analyzeHotState, detectMainGod, discoverGenericPolicy, resolvePolicy } from './hot_state_governor_core.js';
+
           const abilities = {};
-          for (let i = 0; i < 13; i++) abilities[`能力${i}`] = { 名称: `能力${i}` };
-          const statData = {
-            玩家: { 能力: abilities, 装备: {} },
-            轮回残印: { 解析档案: {}, 世界烙印: {} },
-            当前轮回: { 轮次: 1 },
-            当前世界: { 重要人物: {}, 重要势力: {}, 重大事件: {}, 玩家已知情报: {} },
-            长期人物: { 小龙女: { 是否同行: true, 共同经历: Array(9).fill('x'), 与玩家关系: { 关键关系事件: Array(6).fill('x') } } },
-            轮回者生态: { 轮回队: {}, 重要轮回者: {}, 已知组织: {} },
-            资源: { 世界坐标: {} },
-            世界档案: {},
+          for (let i = 0; i < 13; i++) abilities[`能力${i}`] = { 名称:`能力${i}` };
+          const mainGod = {
+            玩家:{ 能力:abilities, 装备:{} },
+            轮回残印:{ 解析档案:{}, 世界烙印:{} },
+            当前轮回:{ 轮次:1 },
+            当前世界:{ 重要人物:{}, 重要势力:{}, 重大事件:{}, 玩家已知情报:{} },
+            长期人物:{ 小龙女:{ 是否同行:true, 共同经历:Array(9).fill('x'), 与玩家关系:{关键关系事件:Array(6).fill('x')} } },
+            轮回者生态:{ 轮回队:{}, 重要轮回者:{}, 已知组织:{} },
+            资源:{ 世界坐标:{} },
+            世界档案:{},
           };
-          if (!detectMainGod(statData)) throw new Error('main-god profile was not detected');
-          const report = analyzeHotState(statData);
-          const ability = report.collections.find(x => x.path === '/玩家/能力');
-          if (!ability || ability.level !== 'warn' || ability.excess !== 1) throw new Error('ability budget analysis failed');
-          const longPerson = report.collections.find(x => x.path === '/长期人物');
-          if (!longPerson || longPerson.protectedCount !== 1) throw new Error('同行 protection analysis failed');
-          if (report.histories.length !== 2) throw new Error(`expected 2 internal-history warnings, got ${report.histories.length}`);
-          if (report.readOnly !== true) throw new Error('governor must remain read-only');
-          console.log('hot state governor behavior ok');
+          if (!detectMainGod(mainGod)) throw new Error('main-god adapter not detected');
+          const mainReport = analyzeHotState(mainGod);
+          if (mainReport.policySource !== 'builtin-profile') throw new Error('main-god must use optional built-in adapter');
+          const ability = mainReport.collections.find(x => x.path === '/玩家/能力');
+          if (!ability || ability.level !== 'warn' || ability.excess !== 1) throw new Error('ability budget failed');
+          if (mainReport.collections.find(x => x.path === '/长期人物')?.protectedCount !== 1) throw new Error('同行 protection failed');
+          if (mainReport.histories.length !== 2) throw new Error('internal history analysis failed');
+
+          const generic = {
+            主角:{ 名称:'甲' },
+            技能库:Object.fromEntries(Array.from({length:13}, (_,i)=>[`技能${i}`, {等级:i}])),
+            人际:Object.fromEntries(Array.from({length:7}, (_,i)=>[`人物${i}`, {经历:Array(9).fill(`e${i}`), 状态:'离线'}])),
+          };
+          if (detectMainGod(generic)) throw new Error('generic card misdetected as main-god');
+          const inferred = discoverGenericPolicy(generic);
+          if (!inferred.collectionPolicies.some(x => x.path === '/技能库')) throw new Error('generic collection discovery failed');
+          const genericReport = analyzeHotState(generic);
+          if (genericReport.policySource !== 'generic-auto') throw new Error('generic card must use generic discovery');
+          if (!genericReport.collections.some(x => x.path === '/技能库')) throw new Error('generic report missing discovered collection');
+
+          const cardPolicy = { id:'custom-card', label:'卡内策略', collectionPolicies:[{path:'/技能库',label:'技能',softLimit:5,hardLimit:10,strategy:'test'}], historyPolicies:[] };
+          const resolved = resolvePolicy(generic, cardPolicy);
+          if (resolved.source !== 'card' || resolved.id !== 'custom-card') throw new Error('card-provided policy must win');
+          if (analyzeHotState(generic, { externalPolicy:cardPolicy }).policySource !== 'card') throw new Error('external policy analysis failed');
+          if (genericReport.readOnly !== true) throw new Error('governor must remain read-only');
+          console.log('universal hot state governor behavior ok');
           JS
       - name: One-time archive selector behavior
         run: |
           node --input-type=module <<'JS'
           import { selectOneTimeArchiveTestCandidate } from './experimental/one_time_archive_test_core.js';
-          const statData = {
-            人物: {
-              当前主角: { note: 'protected' },
-              甲人物: { bio: 'a'.repeat(500) },
-              乙人物: { bio: 'b'.repeat(80) },
-              丙人物: { bio: 'c'.repeat(120) },
-              丁人物: { bio: 'd'.repeat(140) },
-              VAB测试节点: { bio: 'tiny' },
-            },
-            当前队伍: { 成员: ['甲人物'] },
-          };
-          const picked = selectOneTimeArchiveTestCandidate({ statData, recentText: '刚刚遇到乙人物' });
-          if (!picked) throw new Error('expected a candidate');
-          if (picked.key !== 'VAB测试节点') throw new Error(`expected preferred test node, got ${picked.key}`);
-          const withoutTest = structuredClone(statData);
-          delete withoutTest.人物.VAB测试节点;
-          const picked2 = selectOneTimeArchiveTestCandidate({ statData: withoutTest, recentText: '刚刚遇到乙人物' });
-          if (!picked2) throw new Error('expected fallback candidate');
-          if (picked2.key === '乙人物' || picked2.key === '当前主角' || picked2.key === '甲人物') {
-            throw new Error(`protection failed: ${picked2.key}`);
-          }
-          console.log('one-time archive selector ok', picked.key, picked2.key);
+          const statData = { 人物:{ 当前主角:{note:'protected'}, 甲人物:{bio:'a'.repeat(500)}, 乙人物:{bio:'b'.repeat(80)}, 丙人物:{bio:'c'.repeat(120)}, 丁人物:{bio:'d'.repeat(140)}, VAB测试节点:{bio:'tiny'} }, 当前队伍:{成员:['甲人物']} };
+          const picked = selectOneTimeArchiveTestCandidate({ statData, recentText:'刚刚遇到乙人物' });
+          if (!picked || picked.key !== 'VAB测试节点') throw new Error('preferred test node selection failed');
+          const withoutTest = structuredClone(statData); delete withoutTest.人物.VAB测试节点;
+          const picked2 = selectOneTimeArchiveTestCandidate({ statData:withoutTest, recentText:'刚刚遇到乙人物' });
+          if (!picked2 || ['乙人物','当前主角','甲人物'].includes(picked2.key)) throw new Error('protection failed');
+          console.log('one-time archive selector ok');
           JS
       - name: Production safety invariants
         shell: bash
@@ -132,7 +118,7 @@ jobs:
           grep -q "import './production_auto.js'" bootstrap.js
           grep -q "import './hot_state_governor.js'" bootstrap.js
           ! grep -q "lifecycle_watchdog.js" bootstrap.js
-          grep -q '"version": "0.3.0"' manifest.json
+          grep -q '"version": "0.3.1"' manifest.json
           grep -q '"auto_update": true' manifest.json
           grep -q "selectHotArchiveMatches" hot_archive_reconcile.js
           grep -q "core-hot-presence-reconcile" hot_archive_reconcile.js
@@ -144,8 +130,10 @@ jobs:
           ! grep -q "replaceMvuData" hot_archive_reconcile.js
           ! grep -q "replaceMvuData\|archiveChild\|restoreArchive\|putArchive" hot_state_governor.js
           grep -q "readOnly: true" hot_state_governor_core.js
-          grep -q "MAIN_GOD_COLLECTION_POLICIES" hot_state_governor_core.js
-          grep -q "MAIN_GOD_HISTORY_POLICIES" hot_state_governor_core.js
+          grep -q "discoverGenericPolicy" hot_state_governor_core.js
+          grep -q "externalPolicy" hot_state_governor_core.js
+          grep -q "policySource" hot_state_governor_core.js
+          grep -q "universal: true" hot_state_governor.js
           ! grep -q "new MutationObserver" hot_archive_reconcile.js bootstrap.js production_auto.js hot_state_governor.js
           grep -q "START_DELAY_MS = 4500" production_auto.js
           grep -q "decideAutoStart" production_auto.js
@@ -168,23 +156,20 @@ jobs:
           set -euo pipefail
           python - <<'PY'
           import pathlib, re, sys
-          roots = [pathlib.Path('bootstrap.js'), pathlib.Path('production_auto.js')]
+          roots=[pathlib.Path('bootstrap.js'), pathlib.Path('production_auto.js')]
           seen=set(); missing=[]
           while roots:
               p=roots.pop()
-              if p in seen or not p.exists():
-                  continue
+              if p in seen or not p.exists(): continue
               seen.add(p)
               text=p.read_text(encoding='utf-8')
               for rel in re.findall(r"(?:from\s+|import\s*\()['\"](\./[^'\"]+)['\"]", text):
                   q=(p.parent/rel).resolve()
                   try: rq=q.relative_to(pathlib.Path.cwd().resolve())
                   except Exception: continue
-                  if q.suffix=='' and not q.exists() and q.with_suffix('.js').exists():
-                      q=q.with_suffix('.js'); rq=q.relative_to(pathlib.Path.cwd().resolve())
+                  if q.suffix=='' and not q.exists() and q.with_suffix('.js').exists(): q=q.with_suffix('.js'); rq=q.relative_to(pathlib.Path.cwd().resolve())
                   if not q.exists(): missing.append(f'{p} -> {rel}')
                   elif q.suffix=='.js': roots.append(rq)
-          if missing:
-              print('\n'.join(missing)); sys.exit(1)
+          if missing: print('\n'.join(missing)); sys.exit(1)
           print(f'import graph ok: {len(seen)} files')
           PY
