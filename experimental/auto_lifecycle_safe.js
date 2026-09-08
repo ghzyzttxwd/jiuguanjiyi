@@ -16,7 +16,7 @@ import {
   updateRehydrationObservations,
 } from './auto_lifecycle_core.js';
 
-const VERSION = '0.2.0-rc1';
+const VERSION = '0.2.0-rc2';
 const TRIGGER_DELAY_MS = 1800;
 const STABLE_RECHECK_MS = 1400;
 const UI_INTERVAL_MS = 4000;
@@ -339,28 +339,28 @@ function unhookEvents() {
   generationFlag = false;
 }
 
-async function setEnabled(value) {
+async function setEnabled(value, { skipConfirm = false } = {}) {
   if (!value) {
     enabled = false;
     clearScheduled();
     statusText = '未启用 · 不会自动修改MVU';
     updateUi();
-    return;
+    return enabled;
   }
   if (busy || await isGenerationActive()) {
     enabled = false;
     statusText = '无法开启：当前正在生成或事务执行中';
     updateUi();
-    return;
+    return enabled;
   }
   const s = await refreshStableState();
   if (dualEngineEnabled(s)) {
     enabled = false;
     statusText = '无法开启：旧自动归档或智能托管RC仍开启，禁止双写引擎';
     updateUi();
-    return;
+    return enabled;
   }
-  const ok = confirm([
+  const ok = skipConfirm || confirm([
     '这是统一自动生命周期托管候选版。',
     '',
     '仅本次页面会话有效，刷新/重启后自动关闭。',
@@ -376,10 +376,17 @@ async function setEnabled(value) {
     : '未启用 · 不会自动修改MVU';
   if (enabled) scheduleCycle(TRIGGER_DELAY_MS);
   updateUi();
+  return enabled;
+}
+
+function uiHost() {
+  return document.querySelector('#vab-rc-host')
+    || document.querySelector('#vab-smart-host-safe')
+    || document.querySelector('#vab-settings #vab-root');
 }
 
 function ensureUi() {
-  const host = document.querySelector('#vab-smart-host-safe');
+  const host = uiHost();
   if (!host) return;
   if (host.querySelector('#vab-auto-lifecycle-safe')) {
     updateUi();
@@ -392,7 +399,7 @@ function ensureUi() {
   box.open = false;
   box.innerHTML = `
     <summary>🧬 统一生命周期托管 ${VERSION}</summary>
-    <div class="vab-note">新架构：冷档案“被提到”≠恢复MVU。提到只由Prompt召回层提供上下文；只有变量自己重新进入热区，才触发重激活合并。写入优先级固定为：重激活收口 ＞ 热→冷归档；同一轮最多1次MVU修改。</div>
+    <div class="vab-note">RC2：支持统一主控直接调用，不再需要主控模拟点击UI。冷档案“被提到”≠恢复MVU；只有变量自己重新进入热区，才触发重激活合并。写入优先级：重激活收口 ＞ 热→冷归档。</div>
     <label class="checkbox_label"><input type="checkbox" data-vab-lifecycle-enable> 本次页面会话启用自动生命周期托管（实验）</label>
     <div class="vab-actions"><button class="menu_button" data-vab-lifecycle-preview>统一只读检查</button></div>
     <div class="vab-note">保护：生成期间禁止写；聊天切换首轮禁止写；重激活需连续稳定观察；30秒写入冷却；同一消息计数最多1次迁移；10分钟3次异常自动熔断。启用状态绝不写入localStorage。</div>
@@ -443,6 +450,10 @@ export function unmountAutoLifecycleSafe() {
   statusText = '未启用 · 不会自动修改MVU';
 }
 
+export async function setLifecycleEnabledSession(value, options = {}) {
+  return await setEnabled(!!value, options);
+}
+
 export const AutoLifecycleSafeDiagnostics = {
   VERSION,
   isEnabled: () => enabled,
@@ -461,4 +472,5 @@ export const AutoLifecycleSafeDiagnostics = {
   }),
   getLastDecision: () => clone(lastDecision),
   preview: () => runCycle({ forcePreview: true }),
+  setEnabled: setLifecycleEnabledSession,
 };
