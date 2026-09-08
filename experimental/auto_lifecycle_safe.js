@@ -16,7 +16,7 @@ import {
   updateRehydrationObservations,
 } from './auto_lifecycle_core.js';
 
-const VERSION = '0.2.0-rc2';
+const VERSION = '0.2.0-rc3';
 const TRIGGER_DELAY_MS = 1800;
 const STABLE_RECHECK_MS = 1400;
 const UI_INTERVAL_MS = 4000;
@@ -240,7 +240,7 @@ async function runCycle({ forcePreview = false } = {}) {
     if (forcePreview || !enabled) return decision;
 
     if (lastMutationMessageCount === currentMessages && ['rehydrate', 'archive'].includes(decision.action)) {
-      statusText = '同一消息计数已经执行过一次MVU迁移，本轮跳过';
+      statusText = '同一消息计数已经执行过一次生命周期迁移，本轮跳过';
       return { action: 'hold', reason: statusText };
     }
 
@@ -253,14 +253,20 @@ async function runCycle({ forcePreview = false } = {}) {
       const recordId = decision.plan?.record?.id;
       if (!recordId) throw new Error('重激活计划缺少冷档案ID');
       const io = createRehydrationLiveIo();
-      const result = await executeRehydrationTransaction(io, recordId);
+      // Generic automatic mode is intentionally conservative: current hot MVU is authoritative.
+      // It may close an obsolete cold version, but it never resurrects cold-only fields into MVU.
+      const result = await executeRehydrationTransaction(io, recordId, { autoConservative: true });
       lastMutationAt = Date.now();
       lastMutationMessageCount = messageCount();
       observations = {};
       errorTimes = [];
-      statusText = result.status === 'committed'
-        ? `✅ 自动重激活完成并验证：${result.pointer}`
-        : `✅ 重激活收口完成：${result.pointer || result.reason || result.status}`;
+      if (result.mode === 'auto-conservative-hot-authoritative') {
+        statusText = `✅ 自动重激活安全收口：${result.pointer} · 当前热状态优先，未回灌 ${result.coldOnlyFieldsSkipped || 0} 个冷旧字段`;
+      } else {
+        statusText = result.status === 'committed'
+          ? `✅ 自动重激活完成并验证：${result.pointer}`
+          : `✅ 重激活收口完成：${result.pointer || result.reason || result.status}`;
+      }
       return { action: 'rehydrated', result };
     }
 
@@ -364,15 +370,16 @@ async function setEnabled(value, { skipConfirm = false } = {}) {
     '这是统一自动生命周期托管候选版。',
     '',
     '仅本次页面会话有效，刷新/重启后自动关闭。',
-    '它会自动执行：安全热→冷归档，以及“节点重新进入热区”后的事务重激活。',
-    '它不会因为聊天里提到一个冷档案名字就硬恢复该档案；提及只应交给Prompt召回层。',
-    '每次最多修改1个MVU节点，并受生成期锁、scope锁、稳定观察、冷却和熔断保护。',
+    '它会自动执行：安全热→冷归档，以及“节点重新进入热区”后的重激活收口。',
+    '自动重激活采用保守模式：当前热MVU永远是权威，不会把冷档案里已经消失的旧字段擅自写回。',
+    '聊天里只是提到冷档案名字也不会硬恢复；相关旧事实只交给Prompt召回层。',
+    '每次最多处理1个生命周期动作，并受生成期锁、scope锁、稳定观察、冷却和熔断保护。',
     '',
     '是否仅在本次页面会话开启？',
   ].join('\n'));
   enabled = !!ok;
   statusText = enabled
-    ? '已开启 · session-only · 等待稳定事件；提及冷档案不会硬恢复'
+    ? '已开启 · session-only · 自动重激活采用热状态权威的保守收口'
     : '未启用 · 不会自动修改MVU';
   if (enabled) scheduleCycle(TRIGGER_DELAY_MS);
   updateUi();
@@ -399,10 +406,10 @@ function ensureUi() {
   box.open = false;
   box.innerHTML = `
     <summary>🧬 统一生命周期托管 ${VERSION}</summary>
-    <div class="vab-note">RC2：支持统一主控直接调用，不再需要主控模拟点击UI。冷档案“被提到”≠恢复MVU；只有变量自己重新进入热区，才触发重激活合并。写入优先级：重激活收口 ＞ 热→冷归档。</div>
+    <div class="vab-note">RC3：冷档案“被提到”≠恢复MVU。自动模式只在归档节点真正重新出现后收口旧版本，而且以当前热MVU为唯一权威：不会自动把冷档案独有、可能已过期的字段回灌。需要主动合并旧字段时只保留给高级人工事务。</div>
     <label class="checkbox_label"><input type="checkbox" data-vab-lifecycle-enable> 本次页面会话启用自动生命周期托管（实验）</label>
     <div class="vab-actions"><button class="menu_button" data-vab-lifecycle-preview>统一只读检查</button></div>
-    <div class="vab-note">保护：生成期间禁止写；聊天切换首轮禁止写；重激活需连续稳定观察；30秒写入冷却；同一消息计数最多1次迁移；10分钟3次异常自动熔断。启用状态绝不写入localStorage。</div>
+    <div class="vab-note">保护：生成期间禁止处理；聊天切换首轮禁止处理；重激活需连续稳定观察；30秒动作冷却；同一消息计数最多1次迁移；10分钟3次异常自动熔断。启用状态绝不写入localStorage。</div>
     <div class="vab-note" data-vab-lifecycle-status>○ ${statusText}</div>`;
   host.appendChild(box);
 
