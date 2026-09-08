@@ -1,0 +1,55 @@
+name: VAB Self Update Tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'self_update.js'
+      - 'self_update_core.js'
+      - 'bootstrap.js'
+      - 'manifest.json'
+      - '.github/workflows/self-update-test.yml'
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Treat JS as ES modules
+        run: printf '{"type":"module"}\n' > package.json
+      - name: Syntax
+        run: |
+          node --check self_update.js
+          node --check self_update_core.js
+          node --check bootstrap.js
+      - name: Version decision behavior
+        run: |
+          node --input-type=module <<'JS'
+          import { compareVersions, hasNewerVersion, chooseUpdatePath } from './self_update_core.js';
+          if (compareVersions('0.3.3','0.3.2') !== 1) throw new Error('version compare failed');
+          if (!hasNewerVersion('0.3.2','0.3.3')) throw new Error('newer version detection failed');
+          if (hasNewerVersion('0.3.3','0.3.3')) throw new Error('equal version must not update');
+          if (chooseUpdatePath({remoteNewer:true, updateOk:true, backendIsUpToDate:false, isAndroid:true}) !== 'reload') throw new Error('normal update path failed');
+          if (chooseUpdatePath({remoteNewer:true, updateOk:true, backendIsUpToDate:true, isAndroid:true}) !== 'force-switch') throw new Error('Android false-up-to-date fallback failed');
+          if (chooseUpdatePath({remoteNewer:true, updateOk:false, backendIsUpToDate:null, isAndroid:true}) !== 'force-switch') throw new Error('Android update failure fallback failed');
+          console.log('self update decision behavior ok');
+          JS
+      - name: Safety invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q '"version": "0.3.3"' manifest.json
+          grep -q "import './self_update.js'" bootstrap.js
+          grep -q "REMOTE_MANIFEST" self_update.js
+          grep -q "'/api/extensions/update'" self_update.js
+          grep -q "'/api/extensions/switch'" self_update.js
+          grep -q "branch: 'main'" self_update.js
+          grep -q "textContent = '更新'" self_update.js
+          ! grep -q "new MutationObserver" self_update.js
+          ! grep -q "'/api/extensions/delete'" self_update.js
+          ! grep -q "'/api/extensions/install'" self_update.js
