@@ -49,6 +49,7 @@ export function selectNextCoolingCandidate(preview) {
         heatScore: Number(item.score) || 0,
         bytes: Math.max(0, Number(item.bytes) || 0),
         reasons: Array.isArray(item.reasons) ? [...item.reasons] : [],
+        ageMessages: Number.isFinite(Number(item.ageMessages)) ? Math.max(0, Number(item.ageMessages)) : null,
         hardExceeded: p.hardExceeded,
         softExceeded: p.softExceeded,
         collectionCount: p.count,
@@ -63,6 +64,7 @@ export function selectNextCoolingCandidate(preview) {
     b.hardExceeded - a.hardExceeded ||
     b.softExceeded - a.softExceeded ||
     a.heatScore - b.heatScore ||
+    (b.ageMessages ?? -1) - (a.ageMessages ?? -1) ||
     b.bytes - a.bytes ||
     a.sourcePath.localeCompare(b.sourcePath, 'zh-CN') ||
     a.key.localeCompare(b.key, 'zh-CN'));
