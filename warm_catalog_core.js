@@ -106,7 +106,8 @@ export function buildCatalogEntries({ statData, report, archives = [], scopeKey 
   }
 
   for (const archive of archives || []) {
-    if (!archive || archive.status !== 'archived' || archive.recordType === 'warm-catalog') continue;
+    // Internal history segments are recall material, not entity-directory entries.
+    if (!archive || archive.status !== 'archived' || archive.recordType === 'warm-catalog' || archive.recordType === 'history-segment') continue;
     const sourcePath = String(archive.sourcePath || '');
     const key = String(archive.childKey || '');
     if (!sourcePath || !key) continue;
