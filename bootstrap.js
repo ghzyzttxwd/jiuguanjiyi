@@ -1,4 +1,4 @@
-// Variable Archive Bridge v0.3.1 bootstrap
+// Variable Archive Bridge v0.3.2 bootstrap
 // Universal MVU archive + recall + read-only hot-state governance for variable cards.
 
 import './index.js';
@@ -15,7 +15,7 @@ import './hot_state_governor.js';
         const target = event.target;
         if (!(target instanceof Element)) return;
 
-        const toggle = target.closest('#vab-settings .inline-drawer-toggle');
+        const toggle = target.closest('#vab-settings .inline-drawer-toggle, #vab-governor-settings .inline-drawer-toggle');
         if (!toggle) return;
 
         event.preventDefault();
@@ -39,7 +39,11 @@ import './hot_state_governor.js';
         }
 
         if (isHidden) {
-            Promise.resolve(window.VariableArchiveBridge?.refreshCurrent?.()).catch(console.warn);
+            if (toggle.closest('#vab-governor-settings')) {
+                Promise.resolve(window.VariableArchiveBridgeHotStateGovernor?.refresh?.()).catch(console.warn);
+            } else {
+                Promise.resolve(window.VariableArchiveBridge?.refreshCurrent?.()).catch(console.warn);
+            }
         }
     }, true);
 })();
