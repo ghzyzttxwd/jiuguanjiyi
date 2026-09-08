@@ -1,0 +1,78 @@
+name: VAB Safe Cooling Tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'safe_cooling_core.js'
+      - 'safe_cooling_executor.js'
+      - 'hot_state_preview_core.js'
+      - 'warm_catalog_core.js'
+      - 'bootstrap.js'
+      - 'manifest.json'
+      - '.github/workflows/safe-cooling-test.yml'
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Treat JS as ES modules
+        run: printf '{"type":"module"}\n' > package.json
+      - name: Syntax
+        run: |
+          node --check safe_cooling_core.js
+          node --check safe_cooling_executor.js
+          node --check bootstrap.js
+      - name: Candidate selection and catalog gates
+        run: |
+          node --input-type=module <<'JS'
+          import { selectNextCoolingCandidate, validatePreCooling, validatePostCooling } from './safe_cooling_core.js';
+          const preview = {
+            collections: [
+              { path:'/玩家/武学', label:'武学', count:16, softLimit:12, hardLimit:24, cooling:[
+                {key:'旧剑法',score:2,bytes:900,reasons:[]},
+                {key:'旧掌法',score:5,bytes:500,reasons:[]},
+              ]},
+              { path:'/人物', label:'人物', count:31, softLimit:12, hardLimit:24, cooling:[
+                {key:'旧友甲',score:8,bytes:400,reasons:[]},
+                {key:'旧友乙',score:1,bytes:300,reasons:[]},
+              ]},
+            ],
+          };
+          const chosen = selectNextCoolingCandidate(preview);
+          if (!chosen || chosen.pointer !== '/人物/旧友乙') throw new Error(`hard-overflow/lowest-heat selection failed: ${chosen?.pointer}`);
+
+          const stat = { 人物:{旧友乙:{关系:'旧识'}} };
+          const hotCatalog = [{id:'catalog:s:/人物/旧友乙',scopeKey:'s',pointer:'/人物/旧友乙',temperature:'hot',coolingCandidate:true}];
+          const pre = validatePreCooling({candidate:chosen,catalogEntries:hotCatalog,statData:stat,scopeKey:'s'});
+          if (!pre.ok) throw new Error(`pre gate failed: ${pre.reason}`);
+          if (validatePreCooling({candidate:chosen,catalogEntries:[],statData:stat,scopeKey:'s'}).ok) throw new Error('missing warm catalog must fail closed');
+
+          const coldCatalog = [{id:'catalog:s:/人物/旧友乙',scopeKey:'s',pointer:'/人物/旧友乙',temperature:'cold',coolingCandidate:false,archiveId:'arc_1'}];
+          const post = validatePostCooling({candidate:chosen,catalogEntries:coldCatalog,statData:{人物:{}},scopeKey:'s'});
+          if (!post.ok || post.archiveId !== 'arc_1') throw new Error(`post gate failed: ${post.reason}`);
+          if (validatePostCooling({candidate:chosen,catalogEntries:coldCatalog,statData:stat,scopeKey:'s'}).ok) throw new Error('hot residue must fail post gate');
+          console.log('safe cooling selection/gates ok');
+          JS
+      - name: Safety invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q '"version": "0.6.0"' manifest.json
+          grep -q "import './safe_cooling_executor.js'" bootstrap.js
+          grep -q "automaticEnabled: false" safe_cooling_executor.js
+          grep -q "maxItemsPerRun: 1" safe_cooling_executor.js
+          grep -q "COOLDOWN_MS = 30_000" safe_cooling_executor.js
+          grep -q "await isGenerationActive()" safe_cooling_executor.js
+          grep -q "validatePreCooling" safe_cooling_executor.js
+          grep -q "validatePostCooling" safe_cooling_executor.js
+          grep -q "await c.archiveChild" safe_cooling_executor.js
+          ! grep -q "replaceMvuData" safe_cooling_executor.js safe_cooling_core.js
+          ! grep -q "new MutationObserver" safe_cooling_executor.js safe_cooling_core.js
+          ! grep -q "setInterval" safe_cooling_executor.js
