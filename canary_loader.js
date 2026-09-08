@@ -4,6 +4,7 @@
 (function installVabMobileCanaryLoader() {
     if (window.__VAB_MOBILE_CANARY_LOADER_INSTALLED__) return;
     window.__VAB_MOBILE_CANARY_LOADER_INSTALLED__ = true;
+    window.__VAB_MOBILE_CANARY_BOOT_STATE__ = 'loader-mounted';
 
     let loadedModules = null;
     let loading = false;
@@ -15,14 +16,36 @@
         }[c]));
     }
 
+    function getStableVab() {
+        try {
+            return window.VariableArchiveBridge || window.parent?.VariableArchiveBridge || null;
+        } catch {
+            return window.VariableArchiveBridge || null;
+        }
+    }
+
     function stableReady() {
-        const vab = window.VariableArchiveBridge || window.parent?.VariableArchiveBridge;
-        return !!(vab?.getState && vab?.refreshCurrent && vab?.archiveChild);
+        try {
+            const vab = getStableVab();
+            return !!(vab?.getState && vab?.refreshCurrent && vab?.archiveChild);
+        } catch {
+            return false;
+        }
+    }
+
+    function getStablePanel() {
+        return document.querySelector('#vab-settings');
     }
 
     function ensureUi() {
-        const root = document.querySelector('#vab-settings #vab-root');
-        if (!root || root.querySelector('#vab-mobile-canary-loader')) return;
+        const stablePanel = getStablePanel();
+        if (!stablePanel) return;
+
+        const existing = document.querySelector('#vab-mobile-canary-loader');
+        if (existing) {
+            window.__VAB_MOBILE_CANARY_BOOT_STATE__ = 'ui-present';
+            return;
+        }
 
         const box = document.createElement('details');
         box.id = 'vab-mobile-canary-loader';
@@ -40,7 +63,12 @@
           <div class="vab-note" data-vab-canary-loader-status>${escapeHtml(statusText)}</div>
           <div id="vab-rc-host"></div>`;
 
-        root.prepend(box);
+        // Critical isolation: mount as a sibling of the stable VAB panel.
+        // Stable v0.1.4 may rerender #vab-root with innerHTML, so anything inserted inside
+        // #vab-root can be erased. A sibling survives those rerenders.
+        stablePanel.insertAdjacentElement('beforebegin', box);
+        window.__VAB_MOBILE_CANARY_BOOT_STATE__ = 'ui-mounted';
+
         const loadBtn = box.querySelector('[data-vab-canary-load]');
         const unloadBtn = box.querySelector('[data-vab-canary-unload]');
         const status = box.querySelector('[data-vab-canary-loader-status]');
@@ -61,6 +89,7 @@
 
             loading = true;
             statusText = '正在载入最小Canary栈；所有自动开关保持关闭…';
+            window.__VAB_MOBILE_CANARY_BOOT_STATE__ = 'rc-loading';
             sync();
 
             let recall = null;
@@ -85,6 +114,7 @@
 
                 loadedModules = { recall, autoLifecycle, memoryMaster, canaryReport };
                 statusText = '✅ Canary栈已载入，但自动功能仍关闭。先用“统一安全预检”，需要时再开最上方统一主控。';
+                window.__VAB_MOBILE_CANARY_BOOT_STATE__ = 'rc-loaded';
             } catch (error) {
                 try { canaryReport?.unmountCanaryReportSafe?.(); } catch {}
                 try { await memoryMaster?.unmountMemoryMasterSafe?.(); } catch {}
@@ -92,6 +122,7 @@
                 try { await recall?.unmountRecallSafe?.(); } catch {}
                 loadedModules = null;
                 statusText = `Canary载入失败并已回滚：${error?.message || error}`;
+                window.__VAB_MOBILE_CANARY_BOOT_STATE__ = 'rc-load-failed';
                 console.error('[VAB Mobile Canary]', error);
             } finally {
                 loading = false;
@@ -111,6 +142,7 @@
                 await loadedModules.recall?.unmountRecallSafe?.();
                 loadedModules = null;
                 statusText = 'Canary栈已卸载。稳定版变量归档桥未受影响。';
+                window.__VAB_MOBILE_CANARY_BOOT_STATE__ = 'ui-mounted';
             } catch (error) {
                 statusText = `Canary卸载异常：${error?.message || error}`;
                 console.error('[VAB Mobile Canary]', error);
