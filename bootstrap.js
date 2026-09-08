@@ -1,5 +1,5 @@
-// Variable Archive Bridge v0.2.1 bootstrap
-// Stable core + hot-presence reconciliation + smart path scanner + automatic memory lifecycle.
+// Variable Archive Bridge v0.2.2 bootstrap
+// Stable core + independent hot-presence reconciliation + smart path scanner + automatic memory lifecycle.
 
 import './index.js';
 import './hot_archive_reconcile.js';
