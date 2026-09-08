@@ -7,7 +7,6 @@ on:
       - 'warm_catalog.js'
       - 'warm_catalog_core.js'
       - 'bootstrap.js'
-      - 'manifest.json'
       - '.github/workflows/warm-catalog-test.yml'
   workflow_dispatch:
 
@@ -37,11 +36,13 @@ jobs:
           const archives = [
             { id:'arc_1', status:'archived', sourcePath:'/玩家/武学', childKey:'紫霞神功', summary:'紫霞神功｜境界:大成', size:333 },
             { id:'arc_old', status:'archived', sourcePath:'/玩家/武学', childKey:'凝血神剑', summary:'旧凝血神剑', size:999 },
+            { id:'hist_1', status:'archived', recordType:'history-segment', sourcePath:'/长期人物/小龙女/共同经历', childKey:'小龙女·共同经历', summary:'旧经历', size:500 },
           ];
           const entries = buildCatalogEntries({ statData, report, preview, archives, scopeKey:'scope1', scopeLabel:'测试' });
           if (entries.length !== 3) throw new Error(`expected 3 catalog entries, got ${entries.length}`);
           const hot = entries.find(x => x.childKey === '凝血神剑');
           const cold = entries.find(x => x.childKey === '紫霞神功');
+          if (entries.some(x => x.childKey === '小龙女·共同经历')) throw new Error('history segment must not pollute entity catalog');
           if (!hot || hot.temperature !== 'hot' || hot.archiveId) throw new Error('hot MVU must override stale cold archive');
           if (!cold || cold.temperature !== 'cold' || cold.archiveId !== 'arc_1') throw new Error('cold archive catalog missing');
           const ctx = buildDirectoryContext(entries, '我会哪些武学？');
@@ -53,9 +54,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          grep -q '"version": "0.5.0"' manifest.json
           grep -q "import './warm_catalog.js'" bootstrap.js
           grep -q "recordType: 'warm-catalog'" warm_catalog_core.js
+          grep -q "recordType === 'history-segment'" warm_catalog_core.js
           grep -q "temperature: 'hot'" warm_catalog_core.js
           grep -q "temperature: 'cold'" warm_catalog_core.js
           grep -q "varArchiveCatalog" warm_catalog.js
