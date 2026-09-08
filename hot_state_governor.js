@@ -1,10 +1,10 @@
-// Variable Archive Bridge v0.3.2 Hot State Governor — universal analysis-only phase.
+// Variable Archive Bridge v0.3.4 Hot State Governor — universal analysis-only phase.
 // Reads current MVU and reports growth pressure. It never writes MVU, archives, or prompts.
 // Card-specific policies are optional adapters; cards without one use conservative generic discovery.
 
 import { analyzeHotState } from './hot_state_governor_core.js';
 
-const VERSION = '0.3.2';
+const VERSION = '0.3.4';
 const PANEL_ID = 'vab-governor-settings';
 const REFRESH_MS = 5000;
 let lastReport = null;
