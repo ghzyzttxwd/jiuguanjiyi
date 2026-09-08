@@ -6,6 +6,7 @@ on:
     paths:
       - 'self_update.js'
       - 'self_update_core.js'
+      - 'mvu_recovery.js'
       - 'bootstrap.js'
       - 'manifest.json'
       - '.github/workflows/self-update-test.yml'
@@ -26,14 +27,15 @@ jobs:
         run: |
           node --check self_update.js
           node --check self_update_core.js
+          node --check mvu_recovery.js
           node --check bootstrap.js
       - name: Version decision behavior
         run: |
           node --input-type=module <<'JS'
           import { compareVersions, hasNewerVersion, chooseUpdatePath } from './self_update_core.js';
-          if (compareVersions('0.4.0','0.3.5') !== 1) throw new Error('version compare failed');
-          if (!hasNewerVersion('0.3.5','0.4.0')) throw new Error('newer version detection failed');
-          if (hasNewerVersion('0.4.0','0.4.0')) throw new Error('equal version must not update');
+          if (compareVersions('0.4.1','0.4.0') !== 1) throw new Error('version compare failed');
+          if (!hasNewerVersion('0.4.0','0.4.1')) throw new Error('newer version detection failed');
+          if (hasNewerVersion('0.4.1','0.4.1')) throw new Error('equal version must not update');
           if (chooseUpdatePath({remoteNewer:true, updateOk:true, backendIsUpToDate:false, isAndroid:true}) !== 'reload') throw new Error('normal update path failed');
           if (chooseUpdatePath({remoteNewer:true, updateOk:true, backendIsUpToDate:true, isAndroid:true}) !== 'force-switch') throw new Error('Android false-up-to-date fallback failed');
           if (chooseUpdatePath({remoteNewer:true, updateOk:false, backendIsUpToDate:null, isAndroid:true}) !== 'force-switch') throw new Error('Android update failure fallback failed');
@@ -43,10 +45,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          grep -q '"version": "0.4.0"' manifest.json
+          grep -q '"version": "0.4.1"' manifest.json
           grep -q "import './self_update.js'" bootstrap.js
+          grep -q "import './mvu_recovery.js'" bootstrap.js
           grep -q "VariableArchiveBridgeSelfUpdate?.check" bootstrap.js
-          grep -q "const CURRENT_VERSION = '0.4.0'" self_update.js
+          grep -q "VariableArchiveBridgeMvuRecovery?.recover" bootstrap.js
+          grep -q "const CURRENT_VERSION = '0.4.1'" self_update.js
           grep -q "const UPDATE_CHECK_MS = 60 \* 1000" self_update.js
           grep -q "visibilitychange" self_update.js
           grep -q "addEventListener('focus'" self_update.js
@@ -55,6 +59,8 @@ jobs:
           grep -q "'/api/extensions/switch'" self_update.js
           grep -q "branch: 'main'" self_update.js
           grep -q "btn.textContent = '更新'" self_update.js
-          ! grep -q "new MutationObserver" self_update.js
+          grep -q "readOnly: true" mvu_recovery.js
+          ! grep -q "replaceMvuData\|archiveChild\|restoreArchive\|putArchive" mvu_recovery.js
+          ! grep -q "new MutationObserver" self_update.js mvu_recovery.js bootstrap.js
           ! grep -q "'/api/extensions/delete'" self_update.js
           ! grep -q "'/api/extensions/install'" self_update.js
