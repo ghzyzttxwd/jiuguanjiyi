@@ -101,12 +101,15 @@ jobs:
           grep -q "import './hot_archive_reconcile.js'" bootstrap.js
           grep -q "import './production_auto.js'" bootstrap.js
           ! grep -q "lifecycle_watchdog.js" bootstrap.js
-          grep -q '"version": "0.2.1"' manifest.json
+          grep -q '"version": "0.2.2"' manifest.json
           grep -q '"auto_update": true' manifest.json
           grep -q "selectHotArchiveMatches" hot_archive_reconcile.js
           grep -q "core-hot-presence-reconcile" hot_archive_reconcile.js
           grep -q "status: 'restored'" hot_archive_reconcile.js
           grep -q "hotAuthoritative: true" hot_archive_reconcile.js
+          grep -q "POLL_MS = 2500" hot_archive_reconcile.js
+          grep -q "MIN_OBSERVATIONS = 2" hot_archive_reconcile.js
+          ! grep -q "wrappedRefresh" hot_archive_reconcile.js
           ! grep -q "replaceMvuData" hot_archive_reconcile.js
           ! grep -q "new MutationObserver" hot_archive_reconcile.js bootstrap.js production_auto.js
           grep -q "START_DELAY_MS = 4500" production_auto.js
