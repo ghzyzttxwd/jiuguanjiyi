@@ -1,0 +1,96 @@
+name: Package VAB Mobile Canary Companion
+
+on:
+  push:
+    branches:
+      - 'canary/mobile-v0.2'
+    paths:
+      - 'manifest.json'
+      - 'canary_bootstrap.js'
+      - 'canary_loader.js'
+      - 'style.css'
+      - 'experimental/**'
+      - '.github/workflows/package-mobile-canary.yml'
+  workflow_dispatch:
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Validate runtime graph and conservative policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check canary_bootstrap.js
+          node --check canary_loader.js
+          for f in \
+            experimental/smart_host_core.js \
+            experimental/smart_host_safe.js \
+            experimental/recall_core.js \
+            experimental/recall_delivery_core.js \
+            experimental/recall_safe.js \
+            experimental/rehydration_core.js \
+            experimental/rehydration_transaction.js \
+            experimental/rehydration_live_adapter.js \
+            experimental/rehydration_live_safe.js \
+            experimental/auto_lifecycle_core.js \
+            experimental/auto_lifecycle_safe.js \
+            experimental/memory_master_core.js \
+            experimental/memory_master_safe.js \
+            experimental/canary_report_core.js \
+            experimental/canary_report_safe.js; do
+            test -f "$f"
+            node --check "$f"
+          done
+          grep -q "executeRehydrationTransaction(io, recordId, { autoConservative: true })" experimental/auto_lifecycle_safe.js
+          grep -q "auto-conservative-hot-authoritative" experimental/rehydration_transaction.js
+          grep -q "setRecallEnabledSession" experimental/memory_master_safe.js
+          grep -q "setLifecycleEnabledSession" experimental/memory_master_safe.js
+          ! grep -q "new MutationObserver" canary_loader.js
+          ! grep -q "replaceMvuData" canary_loader.js
+          ! grep -q "archiveChild(" canary_loader.js
+          ! grep -q "restoreArchive(" canary_loader.js
+
+      - name: Build installable companion zip
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf dist package-root
+          mkdir -p dist package-root/experimental
+          cp manifest.json canary_bootstrap.js canary_loader.js style.css package-root/
+          cp \
+            experimental/smart_host_core.js \
+            experimental/smart_host_safe.js \
+            experimental/recall_core.js \
+            experimental/recall_delivery_core.js \
+            experimental/recall_safe.js \
+            experimental/rehydration_core.js \
+            experimental/rehydration_transaction.js \
+            experimental/rehydration_live_adapter.js \
+            experimental/rehydration_live_safe.js \
+            experimental/auto_lifecycle_core.js \
+            experimental/auto_lifecycle_safe.js \
+            experimental/memory_master_core.js \
+            experimental/memory_master_safe.js \
+            experimental/canary_report_core.js \
+            experimental/canary_report_safe.js \
+            package-root/experimental/
+          printf 'commit=%s\nbranch=canary/mobile-v0.2\nbuild_utc=%s\n' "$GITHUB_SHA" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > package-root/CANARY_BUILD.txt
+          (cd package-root && zip -qr ../dist/VAB-Mobile-Canary-Companion.zip .)
+          sha256sum dist/VAB-Mobile-Canary-Companion.zip > dist/SHA256SUMS.txt
+          unzip -l dist/VAB-Mobile-Canary-Companion.zip
+          unzip -p dist/VAB-Mobile-Canary-Companion.zip manifest.json | grep -q 'Canary伴侣'
+
+      - name: Upload installable zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: vab-mobile-canary-companion
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
