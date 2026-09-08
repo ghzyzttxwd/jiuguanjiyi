@@ -3,7 +3,7 @@
 // No MutationObserver: patch a few times during startup, then stop.
 
 const FALLBACK_VERSION = '0.7.0';
-const MAX_ATTEMPTS = 16;
+const MAX_ATTEMPTS = 20;
 const RETRY_MS = 750;
 
 let attempts = 0;
@@ -21,15 +21,46 @@ function pluginVersion() {
   }
 }
 
+function patchMainHeader(version) {
+  const root = document.querySelector('#vab-settings');
+  if (!root) return 0;
+
+  const direct = root.querySelector('.vab-header small');
+  if (direct) {
+    direct.textContent = `v${version}`;
+    return 1;
+  }
+
+  // Some Android layouts render the whole drawer title as plain text rather than
+  // the desktop .vab-header/small structure. Patch only nodes inside this extension
+  // that actually contain the product title, preserving icons/toggles/other children.
+  const candidates = root.querySelectorAll('summary, .inline-drawer-header, .inline-drawer-toggle, .vab-header, h3, h4, div');
+  for (const el of candidates) {
+    const text = String(el.textContent || '').replace(/\s+/g, ' ').trim();
+    if (!text.includes('变量归档桥')) continue;
+    if (!/v\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?/.test(text)) continue;
+
+    for (const node of el.childNodes) {
+      if (node.nodeType !== Node.TEXT_NODE) continue;
+      const before = String(node.nodeValue || '');
+      if (!before.includes('变量归档桥')) continue;
+      node.nodeValue = before.replace(/v\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?/, `v${version}`);
+      return 1;
+    }
+
+    if (el.children.length === 0) {
+      el.textContent = text.replace(/v\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?/, `v${version}`);
+      return 1;
+    }
+  }
+  return 0;
+}
+
 function patchVisibleVersions() {
   const version = pluginVersion();
   let found = 0;
 
-  const main = document.querySelector('#vab-settings .vab-header small');
-  if (main) {
-    main.textContent = `v${version}`;
-    found += 1;
-  }
+  found += patchMainHeader(version);
 
   const governor = document.querySelector('#vab-governor-settings .vab-governor-header small');
   if (governor) {
