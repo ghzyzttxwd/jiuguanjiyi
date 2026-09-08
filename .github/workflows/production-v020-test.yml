@@ -6,6 +6,7 @@ on:
     paths:
       - 'production_auto.js'
       - 'bootstrap.js'
+      - 'mvu_recovery.js'
       - 'hot_archive_reconcile.js'
       - 'hot_archive_reconcile_core.js'
       - 'hot_state_governor.js'
@@ -32,6 +33,7 @@ jobs:
       - name: Syntax
         run: |
           node --check bootstrap.js
+          node --check mvu_recovery.js
           node --check hot_archive_reconcile.js
           node --check hot_archive_reconcile_core.js
           node --check hot_state_governor.js
@@ -103,15 +105,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          grep -q "import './mvu_recovery.js'" bootstrap.js
           grep -q "import './hot_archive_reconcile.js'" bootstrap.js
           grep -q "import './production_auto.js'" bootstrap.js
           grep -q "import './hot_state_governor.js'" bootstrap.js
           grep -q "import './self_update.js'" bootstrap.js
           ! grep -q "lifecycle_watchdog.js" bootstrap.js
-          grep -q '"version": "0.4.0"' manifest.json
+          grep -q '"version": "0.4.1"' manifest.json
           grep -q '"auto_update": true' manifest.json
           grep -q "const VERSION = '0.4.0'" hot_state_governor.js
-          grep -q "const CURRENT_VERSION = '0.4.0'" self_update.js
+          grep -q "const CURRENT_VERSION = '0.4.1'" self_update.js
+          grep -q "VariableArchiveBridgeMvuRecovery" mvu_recovery.js
+          grep -q "readOnly: true" mvu_recovery.js
+          ! grep -q "replaceMvuData\|archiveChild\|restoreArchive\|putArchive" mvu_recovery.js
           grep -q "buildCoolingPreview" hot_state_governor.js
           grep -q "warmIndex" hot_state_preview_core.js
           grep -q "readOnly: true" hot_state_preview_core.js
@@ -128,7 +134,7 @@ jobs:
           grep -q "'/api/extensions/update'" self_update.js
           grep -q "'/api/extensions/switch'" self_update.js
           ! grep -q "'/api/extensions/delete'\|'/api/extensions/install'" self_update.js
-          ! grep -q "new MutationObserver" hot_archive_reconcile.js bootstrap.js production_auto.js hot_state_governor.js self_update.js
+          ! grep -q "new MutationObserver" mvu_recovery.js hot_archive_reconcile.js bootstrap.js production_auto.js hot_state_governor.js self_update.js
           grep -q "START_DELAY_MS = 4500" production_auto.js
           grep -q "HEALTH_WATCHDOG_MS = 15000" production_auto.js
           grep -q "fail-closed" production_auto.js
