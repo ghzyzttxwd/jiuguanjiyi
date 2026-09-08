@@ -1,12 +1,12 @@
 {
-  "display_name": "变量归档桥",
-  "loading_order": 120,
+  "display_name": "变量归档桥 Canary伴侣",
+  "loading_order": 130,
   "requires": [],
   "optional": [],
-  "js": "bootstrap.js",
+  "js": "canary_bootstrap.js",
   "css": "style.css",
   "author": "OpenAI + user",
-  "version": "0.1.4",
+  "version": "0.2.0-rc-canary",
   "homePage": "https://github.com/ghzyzttxwd/jiuguanjiyi",
-  "auto_update": true
+  "auto_update": false
 }
