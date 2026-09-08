@@ -118,8 +118,12 @@ jobs:
           grep -q "import './production_auto.js'" bootstrap.js
           grep -q "import './hot_state_governor.js'" bootstrap.js
           ! grep -q "lifecycle_watchdog.js" bootstrap.js
-          grep -q '"version": "0.3.1"' manifest.json
+          grep -q '"version": "0.3.2"' manifest.json
           grep -q '"auto_update": true' manifest.json
+          grep -q "#vab-governor-settings .inline-drawer-toggle" bootstrap.js
+          grep -q "VariableArchiveBridgeHotStateGovernor?.refresh" bootstrap.js
+          grep -q "const VERSION = '0.3.2'" hot_state_governor.js
+          ! grep -q "toggle?.addEventListener('click'" hot_state_governor.js
           grep -q "selectHotArchiveMatches" hot_archive_reconcile.js
           grep -q "core-hot-presence-reconcile" hot_archive_reconcile.js
           grep -q "status: 'restored'" hot_archive_reconcile.js
