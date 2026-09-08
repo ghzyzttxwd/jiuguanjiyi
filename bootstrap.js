@@ -4,6 +4,7 @@
 import './index.js';
 import './smart_scan.js';
 import './production_auto.js';
+import './experimental/lifecycle_watchdog.js';
 
 (function installVabDrawerFix() {
     if (window.__VAB_DRAWER_FIX_INSTALLED__) return;
