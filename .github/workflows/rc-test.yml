@@ -35,6 +35,8 @@ jobs:
         run: node experimental/test_rehydration_live_adapter.mjs
       - name: Unified lifecycle decision tests
         run: node experimental/test_auto_lifecycle_core.mjs
+      - name: Unified memory master tests
+        run: node experimental/test_memory_master_core.mjs
       - name: End-to-end cold memory lifecycle
         run: node experimental/test_memory_pipeline_e2e.mjs
       - name: Long-session stress simulation
@@ -53,6 +55,8 @@ jobs:
           node --check experimental/rehydration_live_safe.js
           node --check experimental/auto_lifecycle_core.js
           node --check experimental/auto_lifecycle_safe.js
+          node --check experimental/memory_master_core.js
+          node --check experimental/memory_master_safe.js
           node --check experimental/test_smart_host_stress.mjs
           node --check experimental/test_recall_core.mjs
           node --check experimental/test_recall_delivery_core.mjs
@@ -60,6 +64,7 @@ jobs:
           node --check experimental/test_rehydration_transaction.mjs
           node --check experimental/test_rehydration_live_adapter.mjs
           node --check experimental/test_auto_lifecycle_core.mjs
+          node --check experimental/test_memory_master_core.mjs
           node --check experimental/test_memory_pipeline_e2e.mjs
           node --check safe_loader.js
           node --check smart_scan.js
@@ -67,7 +72,7 @@ jobs:
       - name: Safety invariants
         shell: bash
         run: |
-          if grep -R "new MutationObserver" bootstrap.js smart_scan.js safe_loader.js experimental/smart_host_safe.js experimental/recall_safe.js experimental/rehydration_safe.js experimental/rehydration_live_safe.js experimental/auto_lifecycle_safe.js; then
+          if grep -R "new MutationObserver" bootstrap.js smart_scan.js safe_loader.js experimental/smart_host_safe.js experimental/recall_safe.js experimental/rehydration_safe.js experimental/rehydration_live_safe.js experimental/auto_lifecycle_safe.js experimental/memory_master_safe.js; then
             echo 'Forbidden MutationObserver found in active or candidate UI code.'
             exit 1
           fi
@@ -143,13 +148,30 @@ jobs:
           ! grep -q "setInterval([^\n]*runCycle" experimental/auto_lifecycle_safe.js
           ! grep -q "localStorage.setItem.*enabled" experimental/auto_lifecycle_safe.js
 
+          # Unified memory master: one session-only switch, recall first / writer second, rollback on partial enable, fail-closed on child failure.
+          grep -q "let masterEnabled = false" experimental/memory_master_safe.js
+          grep -q "enableMasterStack" experimental/memory_master_safe.js
+          grep -q "disableMasterStack" experimental/memory_master_safe.js
+          grep -q "assessMasterHealth" experimental/memory_master_safe.js
+          grep -q "fail-closed" experimental/memory_master_safe.js
+          grep -q "Prompt召回" experimental/memory_master_core.js
+          grep -q "lifecycle" experimental/memory_master_core.js
+          ! grep -q "localStorage.setItem.*masterEnabled" experimental/memory_master_safe.js
+          ! grep -q "replaceMvuData" experimental/memory_master_safe.js
+          ! grep -q "archiveChild" experimental/memory_master_safe.js
+          ! grep -q "restoreArchive" experimental/memory_master_safe.js
+          ! grep -q "indexedDB" experimental/memory_master_safe.js
+
           # Production startup remains inert. Candidate code may only be dynamically imported by the explicit safety gate.
           grep -q "import('./experimental/smart_host_safe.js')" safe_loader.js
           grep -q "import('./experimental/recall_safe.js')" safe_loader.js
           grep -q "import('./experimental/rehydration_safe.js')" safe_loader.js
           grep -q "import('./experimental/rehydration_live_safe.js')" safe_loader.js
+          grep -q "import('./experimental/auto_lifecycle_safe.js')" safe_loader.js
+          grep -q "import('./experimental/memory_master_safe.js')" safe_loader.js
           ! grep -q "import './experimental/smart_host_safe.js'" bootstrap.js
           ! grep -q "recall_safe" bootstrap.js
           ! grep -q "rehydration_safe" bootstrap.js
           ! grep -q "rehydration_live_safe" bootstrap.js
           ! grep -q "auto_lifecycle_safe" bootstrap.js
+          ! grep -q "memory_master_safe" bootstrap.js
