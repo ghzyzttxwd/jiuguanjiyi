@@ -187,6 +187,7 @@ export async function setAutoCoolingEnabled(value) {
     statusText = '模型正在生成，暂不启用自动降温';
     return enabled;
   }
+  hookEvents();
   enabled = true;
   generationFlag = false;
   errorTimes = [];
