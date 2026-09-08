@@ -1,4 +1,4 @@
-name: VAB Production v0.5 Tests
+name: VAB Production v0.6 Tests
 
 on:
   push:
@@ -14,6 +14,8 @@ on:
       - 'hot_state_preview_core.js'
       - 'warm_catalog.js'
       - 'warm_catalog_core.js'
+      - 'safe_cooling_executor.js'
+      - 'safe_cooling_core.js'
       - 'self_update.js'
       - 'self_update_core.js'
       - 'manifest.json'
@@ -43,6 +45,8 @@ jobs:
           node --check hot_state_preview_core.js
           node --check warm_catalog.js
           node --check warm_catalog_core.js
+          node --check safe_cooling_executor.js
+          node --check safe_cooling_core.js
           node --check self_update.js
           node --check self_update_core.js
           node --check production_auto.js
@@ -115,6 +119,21 @@ jobs:
           if (!ctx.includes('凝血神剑') || !ctx.includes('紫霞神功[冷]')) throw new Error('directory context incomplete');
           console.log('warm catalog behavior ok');
           JS
+      - name: Safe cooling behavior
+        run: |
+          node --input-type=module <<'JS'
+          import { selectNextCoolingCandidate, validatePreCooling, validatePostCooling } from './safe_cooling_core.js';
+          const preview = { collections:[{ path:'/玩家/武学', label:'武学', count:16, softLimit:12, hardLimit:24, cooling:[
+            {key:'旧剑法',score:2,bytes:900,reasons:[]}, {key:'旧掌法',score:5,bytes:500,reasons:[]}
+          ]}] };
+          const chosen = selectNextCoolingCandidate(preview);
+          if (!chosen || chosen.pointer !== '/玩家/武学/旧剑法') throw new Error('safe cooling candidate selection failed');
+          const pre = validatePreCooling({ candidate:chosen, statData:{玩家:{武学:{旧剑法:{}}}}, scopeKey:'s', catalogEntries:[{scopeKey:'s',pointer:chosen.pointer,temperature:'hot',coolingCandidate:true}] });
+          if (!pre.ok) throw new Error(pre.reason);
+          const post = validatePostCooling({ candidate:chosen, statData:{玩家:{武学:{}}}, scopeKey:'s', catalogEntries:[{scopeKey:'s',pointer:chosen.pointer,temperature:'cold',archiveId:'arc_1'}] });
+          if (!post.ok) throw new Error(post.reason);
+          console.log('safe cooling behavior ok');
+          JS
       - name: One-time archive selector behavior
         run: |
           node --input-type=module <<'JS'
@@ -133,13 +152,14 @@ jobs:
           grep -q "import './production_auto.js'" bootstrap.js
           grep -q "import './hot_state_governor.js'" bootstrap.js
           grep -q "import './warm_catalog.js'" bootstrap.js
+          grep -q "import './safe_cooling_executor.js'" bootstrap.js
           grep -q "import './self_update.js'" bootstrap.js
           ! grep -q "lifecycle_watchdog.js" bootstrap.js
-          grep -q '"version": "0.5.0"' manifest.json
+          grep -q '"version": "0.6.0"' manifest.json
           grep -q '"auto_update": true' manifest.json
           grep -q "const VERSION = '0.4.0'" hot_state_governor.js
           grep -q "const VERSION = '0.5.0'" warm_catalog.js
-          grep -q "const CURRENT_VERSION = '0.5.0'" self_update.js
+          grep -q "const CURRENT_VERSION = '0.6.0'" self_update.js
           grep -q "VariableArchiveBridgeMvuRecovery" mvu_recovery.js
           grep -q "readOnly: true" mvu_recovery.js
           ! grep -q "replaceMvuData\|archiveChild\|restoreArchive\|putArchive" mvu_recovery.js
@@ -150,6 +170,11 @@ jobs:
           grep -q "recordType: 'warm-catalog'" warm_catalog_core.js
           grep -q "varArchiveCatalog" warm_catalog.js
           ! grep -q "replaceMvuData\|archiveChild\|restoreArchive" warm_catalog.js warm_catalog_core.js
+          grep -q "automaticEnabled: false" safe_cooling_executor.js
+          grep -q "maxItemsPerRun: 1" safe_cooling_executor.js
+          grep -q "validatePreCooling" safe_cooling_executor.js
+          grep -q "validatePostCooling" safe_cooling_executor.js
+          ! grep -q "replaceMvuData" safe_cooling_executor.js safe_cooling_core.js
           grep -q "selectHotArchiveMatches" hot_archive_reconcile.js
           grep -q "status: 'restored'" hot_archive_reconcile.js
           grep -q "hotAuthoritative: true" hot_archive_reconcile.js
@@ -162,7 +187,7 @@ jobs:
           grep -q "'/api/extensions/update'" self_update.js
           grep -q "'/api/extensions/switch'" self_update.js
           ! grep -q "'/api/extensions/delete'\|'/api/extensions/install'" self_update.js
-          ! grep -q "new MutationObserver" mvu_recovery.js hot_archive_reconcile.js bootstrap.js production_auto.js hot_state_governor.js warm_catalog.js self_update.js
+          ! grep -q "new MutationObserver" mvu_recovery.js hot_archive_reconcile.js bootstrap.js production_auto.js hot_state_governor.js warm_catalog.js safe_cooling_executor.js self_update.js
           grep -q "START_DELAY_MS = 4500" production_auto.js
           grep -q "HEALTH_WATCHDOG_MS = 15000" production_auto.js
           grep -q "fail-closed" production_auto.js
