@@ -9,6 +9,8 @@ on:
       - 'mvu_recovery.js'
       - 'warm_catalog.js'
       - 'warm_catalog_core.js'
+      - 'safe_cooling_executor.js'
+      - 'safe_cooling_core.js'
       - 'bootstrap.js'
       - 'manifest.json'
       - '.github/workflows/self-update-test.yml'
@@ -32,14 +34,16 @@ jobs:
           node --check mvu_recovery.js
           node --check warm_catalog.js
           node --check warm_catalog_core.js
+          node --check safe_cooling_executor.js
+          node --check safe_cooling_core.js
           node --check bootstrap.js
       - name: Version decision behavior
         run: |
           node --input-type=module <<'JS'
           import { compareVersions, hasNewerVersion, chooseUpdatePath } from './self_update_core.js';
-          if (compareVersions('0.5.0','0.4.1') !== 1) throw new Error('version compare failed');
-          if (!hasNewerVersion('0.4.1','0.5.0')) throw new Error('newer version detection failed');
-          if (hasNewerVersion('0.5.0','0.5.0')) throw new Error('equal version must not update');
+          if (compareVersions('0.6.0','0.5.0') !== 1) throw new Error('version compare failed');
+          if (!hasNewerVersion('0.5.0','0.6.0')) throw new Error('newer version detection failed');
+          if (hasNewerVersion('0.6.0','0.6.0')) throw new Error('equal version must not update');
           if (chooseUpdatePath({remoteNewer:true, updateOk:true, backendIsUpToDate:false, isAndroid:true}) !== 'reload') throw new Error('normal update path failed');
           if (chooseUpdatePath({remoteNewer:true, updateOk:true, backendIsUpToDate:true, isAndroid:true}) !== 'force-switch') throw new Error('Android false-up-to-date fallback failed');
           if (chooseUpdatePath({remoteNewer:true, updateOk:false, backendIsUpToDate:null, isAndroid:true}) !== 'force-switch') throw new Error('Android update failure fallback failed');
@@ -49,14 +53,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          grep -q '"version": "0.5.0"' manifest.json
+          grep -q '"version": "0.6.0"' manifest.json
           grep -q "import './self_update.js'" bootstrap.js
           grep -q "import './mvu_recovery.js'" bootstrap.js
           grep -q "import './warm_catalog.js'" bootstrap.js
+          grep -q "import './safe_cooling_executor.js'" bootstrap.js
           grep -q "VariableArchiveBridgeSelfUpdate?.check" bootstrap.js
           grep -q "VariableArchiveBridgeMvuRecovery?.recover" bootstrap.js
           grep -q "VariableArchiveBridgeWarmCatalog?.sync" bootstrap.js
-          grep -q "const CURRENT_VERSION = '0.5.0'" self_update.js
+          grep -q "const CURRENT_VERSION = '0.6.0'" self_update.js
           grep -q "const UPDATE_CHECK_MS = 60 \* 1000" self_update.js
           grep -q "visibilitychange" self_update.js
           grep -q "addEventListener('focus'" self_update.js
@@ -67,6 +72,6 @@ jobs:
           grep -q "btn.textContent = '更新'" self_update.js
           grep -q "readOnly: true" mvu_recovery.js
           ! grep -q "replaceMvuData\|archiveChild\|restoreArchive\|putArchive" mvu_recovery.js
-          ! grep -q "new MutationObserver" self_update.js mvu_recovery.js warm_catalog.js bootstrap.js
+          ! grep -q "new MutationObserver" self_update.js mvu_recovery.js warm_catalog.js safe_cooling_executor.js bootstrap.js
           ! grep -q "'/api/extensions/delete'" self_update.js
           ! grep -q "'/api/extensions/install'" self_update.js
