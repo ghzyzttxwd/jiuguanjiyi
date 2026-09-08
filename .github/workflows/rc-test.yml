@@ -31,6 +31,8 @@ jobs:
         run: node experimental/test_rehydration_core.mjs
       - name: Rehydration transaction tests
         run: node experimental/test_rehydration_transaction.mjs
+      - name: Conservative automatic reactivation tests
+        run: node experimental/test_rehydration_auto_conservative.mjs
       - name: Live rehydration adapter contract tests
         run: node experimental/test_rehydration_live_adapter.mjs
       - name: Unified lifecycle decision tests
@@ -62,6 +64,7 @@ jobs:
           node --check experimental/test_recall_delivery_core.mjs
           node --check experimental/test_rehydration_core.mjs
           node --check experimental/test_rehydration_transaction.mjs
+          node --check experimental/test_rehydration_auto_conservative.mjs
           node --check experimental/test_rehydration_live_adapter.mjs
           node --check experimental/test_auto_lifecycle_core.mjs
           node --check experimental/test_memory_master_core.mjs
@@ -110,6 +113,8 @@ jobs:
 
           # Read-only rehydration core/UI stay read-only; transaction engine itself is dependency-injected.
           grep -q "merge-hot-over-cold" experimental/rehydration_core.js
+          grep -q "autoConservative" experimental/rehydration_transaction.js
+          grep -q "auto-conservative-hot-authoritative" experimental/rehydration_transaction.js
           grep -q "只读" experimental/rehydration_safe.js
           grep -q "rollbackSafely" experimental/rehydration_transaction.js
           grep -q "scope-changed" experimental/rehydration_transaction.js
@@ -139,12 +144,13 @@ jobs:
           grep -q "竞态" experimental/rehydration_live_adapter.js
           grep -q "Dependency injection exists for CI contract tests" experimental/rehydration_live_adapter.js
 
-          # Unified lifecycle: session-only, direct API, event-driven, never hard-restores a cold record on mention.
+          # Unified lifecycle: session-only, direct API, event-driven, mention-only restore suppressed, automatic reactivation conservative.
           grep -q "let enabled = false" experimental/auto_lifecycle_safe.js
           grep -q "setLifecycleEnabledSession" experimental/auto_lifecycle_safe.js
           grep -q "skipConfirm" experimental/auto_lifecycle_safe.js
           grep -q "updateRehydrationObservations" experimental/auto_lifecycle_safe.js
-          grep -q "executeRehydrationTransaction" experimental/auto_lifecycle_safe.js
+          grep -q "executeRehydrationTransaction(io, recordId, { autoConservative: true })" experimental/auto_lifecycle_safe.js
+          grep -q "当前热MVU为唯一权威" experimental/auto_lifecycle_safe.js
           grep -q "archiveChild" experimental/auto_lifecycle_safe.js
           grep -q "MAX_ERRORS_IN_WINDOW" experimental/auto_lifecycle_safe.js
           grep -q "mention-only-restore" experimental/auto_lifecycle_core.js
