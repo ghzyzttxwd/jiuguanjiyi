@@ -6,7 +6,6 @@
   "js": "canary_bootstrap.js",
   "css": "style.css",
   "author": "OpenAI + user",
-  "version": "0.2.0-rc-canary",
-  "homePage": "https://github.com/ghzyzttxwd/jiuguanjiyi/tree/canary/mobile-v0.2",
+  "version": "0.2.0-rc-canary2",
   "auto_update": false
 }
