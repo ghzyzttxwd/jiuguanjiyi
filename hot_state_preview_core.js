@@ -76,7 +76,7 @@ function scoreItem({ key, node, index, total, recentText, touch, messageCount })
   if (fromEnd <= 1) { score += 15; reasons.push('最近加入'); }
   else if (fromEnd <= 4) { score += 8; reasons.push('较新加入'); }
 
-  return { score, reasons, protectedNode };
+  return { score, reasons, protectedNode, ageMessages: age };
 }
 
 function entriesOf(value) {
@@ -140,6 +140,7 @@ export function buildCoolingPreview(statData, analysis, {
           bytes: item.bytes,
           heatScore: item.score,
           reasons: item.reasons,
+          ageMessages: item.ageMessages,
         });
       }
     }
