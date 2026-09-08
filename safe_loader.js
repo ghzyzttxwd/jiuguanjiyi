@@ -1,6 +1,6 @@
 // Variable Archive Bridge v0.1.4 safety gate
 // This file stays inert on normal startup: no experimental module is imported automatically.
-// Candidate modules are loaded only after an explicit user click and all risky switches stay OFF.
+// The RC stack is loaded only after an explicit user click and all automatic features stay OFF.
 
 (function installVabSafeLoader() {
     if (window.__VAB_SAFE_LOADER_INSTALLED__) return;
@@ -25,15 +25,16 @@
         box.className = 'vab-section';
         box.open = true;
         box.innerHTML = `
-          <summary>🧪 智能托管安全测试入口</summary>
+          <summary>🧪 统一自动记忆 RC 安全入口</summary>
           <div class="vab-note">
-            正常启动不会载入任何实验模块。只有你主动点击“加载候选模块”时，才临时载入智能托管、冷档案召回、重激活只读预览，以及双重确认的手动重激活事务候选。所有自动功能与写入武装状态仍保持关闭；重启酒馆后不会自动再次载入。
+            正常启动不会载入实验模块。只有你主动点击“加载统一主控RC”时，才载入最小Canary栈：冷档案Prompt召回 + 生命周期引擎 + 统一主控 + 被动诊断。旧智能托管、手动重激活、只读重激活工具不会被挂载，减少计时器、事件监听和相互干扰。所有自动开关仍默认关闭，重启后不会自动再次载入。
           </div>
           <div class="vab-actions">
-            <button class="menu_button" data-vab-safe-load>加载候选模块</button>
-            <button class="menu_button" data-vab-safe-unload disabled>卸载候选模块</button>
+            <button class="menu_button" data-vab-safe-load>加载统一主控RC</button>
+            <button class="menu_button" data-vab-safe-unload disabled>卸载统一主控RC</button>
           </div>
-          <div class="vab-note" data-vab-safe-loader-status>${escapeHtml(statusText)}</div>`;
+          <div class="vab-note" data-vab-safe-loader-status>${escapeHtml(statusText)}</div>
+          <div id="vab-rc-host"></div>`;
 
         const anchor = root.querySelector('#vab-smart-scan');
         if (anchor) anchor.insertAdjacentElement('beforebegin', box);
@@ -52,47 +53,47 @@
         loadBtn?.addEventListener('click', async () => {
             if (loading || loadedModules) return;
             loading = true;
-            statusText = '正在载入安全候选模块（只加载，自动功能与写入武装全部保持关闭）…';
+            statusText = '正在载入最小Canary栈（仅载入，自动功能全部保持关闭）…';
             sync();
 
-            let smart = null;
             let recall = null;
-            let rehydration = null;
-            let rehydrationLive = null;
+            let autoLifecycle = null;
+            let memoryMaster = null;
+            let canaryReport = null;
             try {
-                smart = await import('./experimental/smart_host_safe.js');
-                if (typeof smart.mountSmartHostSafe !== 'function') {
-                    throw new Error('智能托管候选缺少 mountSmartHostSafe()');
-                }
-                smart.mountSmartHostSafe();
-
                 recall = await import('./experimental/recall_safe.js');
                 if (typeof recall.mountRecallSafe !== 'function') {
                     throw new Error('冷档案召回候选缺少 mountRecallSafe()');
                 }
                 recall.mountRecallSafe();
 
-                rehydration = await import('./experimental/rehydration_safe.js');
-                if (typeof rehydration.mountRehydrationSafe !== 'function') {
-                    throw new Error('重激活合并候选缺少 mountRehydrationSafe()');
+                autoLifecycle = await import('./experimental/auto_lifecycle_safe.js');
+                if (typeof autoLifecycle.mountAutoLifecycleSafe !== 'function') {
+                    throw new Error('统一生命周期候选缺少 mountAutoLifecycleSafe()');
                 }
-                rehydration.mountRehydrationSafe();
+                autoLifecycle.mountAutoLifecycleSafe();
 
-                rehydrationLive = await import('./experimental/rehydration_live_safe.js');
-                if (typeof rehydrationLive.mountRehydrationLiveSafe !== 'function') {
-                    throw new Error('手动重激活事务候选缺少 mountRehydrationLiveSafe()');
+                memoryMaster = await import('./experimental/memory_master_safe.js');
+                if (typeof memoryMaster.mountMemoryMasterSafe !== 'function') {
+                    throw new Error('统一自动记忆主控候选缺少 mountMemoryMasterSafe()');
                 }
-                rehydrationLive.mountRehydrationLiveSafe();
+                memoryMaster.mountMemoryMasterSafe();
 
-                loadedModules = { smart, recall, rehydration, rehydrationLive };
-                statusText = '候选模块已载入；自动托管、实际Prompt召回、重激活写入均仍关闭。手动重激活还需要在独立区域再次武装并逐条确认。';
+                canaryReport = await import('./experimental/canary_report_safe.js');
+                if (typeof canaryReport.mountCanaryReportSafe !== 'function') {
+                    throw new Error('Canary诊断候选缺少 mountCanaryReportSafe()');
+                }
+                canaryReport.mountCanaryReportSafe();
+
+                loadedModules = { recall, autoLifecycle, memoryMaster, canaryReport };
+                statusText = '统一主控RC已载入；所有自动功能仍关闭。最上方“统一自动记忆主控”是唯一推荐总开关；Canary诊断只读，不包含聊天正文、角色名、变量内容或scope ID。';
             } catch (error) {
-                try { rehydrationLive?.unmountRehydrationLiveSafe?.(); } catch {}
-                try { rehydration?.unmountRehydrationSafe?.(); } catch {}
+                try { canaryReport?.unmountCanaryReportSafe?.(); } catch {}
+                try { await memoryMaster?.unmountMemoryMasterSafe?.(); } catch {}
+                try { autoLifecycle?.unmountAutoLifecycleSafe?.(); } catch {}
                 try { await recall?.unmountRecallSafe?.(); } catch {}
-                try { smart?.unmountSmartHostSafe?.(); } catch {}
                 loadedModules = null;
-                statusText = `载入失败并已回滚候选模块：${error?.message || error}`;
+                statusText = `载入失败并已回滚RC栈：${error?.message || error}`;
                 console.error('[VAB Safe Loader]', error);
             } finally {
                 loading = false;
@@ -103,15 +104,15 @@
         unloadBtn?.addEventListener('click', async () => {
             if (loading || !loadedModules) return;
             loading = true;
-            statusText = '正在卸载候选模块…';
+            statusText = '正在卸载统一主控RC…';
             sync();
             try {
-                loadedModules.rehydrationLive?.unmountRehydrationLiveSafe?.();
-                loadedModules.rehydration?.unmountRehydrationSafe?.();
+                loadedModules.canaryReport?.unmountCanaryReportSafe?.();
+                await loadedModules.memoryMaster?.unmountMemoryMasterSafe?.();
+                loadedModules.autoLifecycle?.unmountAutoLifecycleSafe?.();
                 await loadedModules.recall?.unmountRecallSafe?.();
-                loadedModules.smart?.unmountSmartHostSafe?.();
                 loadedModules = null;
-                statusText = '候选模块已卸载。重启也不会自动加载。';
+                statusText = '统一主控RC已卸载。重启也不会自动加载。';
             } catch (error) {
                 statusText = `卸载异常：${error?.message || error}`;
                 console.error('[VAB Safe Loader]', error);

@@ -1,0 +1,36 @@
+name: VAB Boot Guard Tests
+
+on:
+  push:
+    paths:
+      - 'experimental/boot_guard_core.js'
+      - 'experimental/test_boot_guard_core.mjs'
+      - '.github/workflows/boot-guard-test.yml'
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Treat JS as ES modules
+        run: printf '{"type":"module"}\n' > package.json
+      - name: Boot guard decisions
+        run: node experimental/test_boot_guard_core.mjs
+      - name: Syntax
+        run: |
+          node --check experimental/boot_guard_core.js
+          node --check experimental/test_boot_guard_core.mjs
+      - name: Pure-core safety
+        shell: bash
+        run: |
+          ! grep -q "localStorage" experimental/boot_guard_core.js
+          ! grep -q "document" experimental/boot_guard_core.js
+          ! grep -q "window" experimental/boot_guard_core.js
+          grep -q "phase === 'starting'" experimental/boot_guard_core.js
+          grep -q "safeMode" experimental/boot_guard_core.js
+          grep -q "markBootHealthy" experimental/boot_guard_core.js

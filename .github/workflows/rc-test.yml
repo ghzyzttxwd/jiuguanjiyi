@@ -31,8 +31,14 @@ jobs:
         run: node experimental/test_rehydration_core.mjs
       - name: Rehydration transaction tests
         run: node experimental/test_rehydration_transaction.mjs
+      - name: Conservative automatic reactivation tests
+        run: node experimental/test_rehydration_auto_conservative.mjs
       - name: Live rehydration adapter contract tests
         run: node experimental/test_rehydration_live_adapter.mjs
+      - name: Unified lifecycle decision tests
+        run: node experimental/test_auto_lifecycle_core.mjs
+      - name: Unified memory master tests
+        run: node experimental/test_memory_master_core.mjs
       - name: End-to-end cold memory lifecycle
         run: node experimental/test_memory_pipeline_e2e.mjs
       - name: Long-session stress simulation
@@ -49,12 +55,19 @@ jobs:
           node --check experimental/rehydration_safe.js
           node --check experimental/rehydration_live_adapter.js
           node --check experimental/rehydration_live_safe.js
+          node --check experimental/auto_lifecycle_core.js
+          node --check experimental/auto_lifecycle_safe.js
+          node --check experimental/memory_master_core.js
+          node --check experimental/memory_master_safe.js
           node --check experimental/test_smart_host_stress.mjs
           node --check experimental/test_recall_core.mjs
           node --check experimental/test_recall_delivery_core.mjs
           node --check experimental/test_rehydration_core.mjs
           node --check experimental/test_rehydration_transaction.mjs
+          node --check experimental/test_rehydration_auto_conservative.mjs
           node --check experimental/test_rehydration_live_adapter.mjs
+          node --check experimental/test_auto_lifecycle_core.mjs
+          node --check experimental/test_memory_master_core.mjs
           node --check experimental/test_memory_pipeline_e2e.mjs
           node --check safe_loader.js
           node --check smart_scan.js
@@ -62,10 +75,12 @@ jobs:
       - name: Safety invariants
         shell: bash
         run: |
-          if grep -R "new MutationObserver" bootstrap.js smart_scan.js safe_loader.js experimental/smart_host_safe.js experimental/recall_safe.js experimental/rehydration_safe.js experimental/rehydration_live_safe.js; then
+          if grep -R "new MutationObserver" bootstrap.js smart_scan.js safe_loader.js experimental/smart_host_safe.js experimental/recall_safe.js experimental/rehydration_safe.js experimental/rehydration_live_safe.js experimental/auto_lifecycle_safe.js experimental/memory_master_safe.js; then
             echo 'Forbidden MutationObserver found in active or candidate UI code.'
             exit 1
           fi
+
+          # Legacy smart-host candidate remains event-driven and default-off if imported for diagnostics.
           grep -q "enabled = false" experimental/smart_host_safe.js
           grep -q "if (!cfg.enabled)" experimental/smart_host_safe.js
           grep -q "generationActive" experimental/smart_host_safe.js
@@ -80,7 +95,7 @@ jobs:
             exit 1
           fi
 
-          # Recall layer must be isolated, default-off, coordinate duplicate channels, clear only its own prompt, and never write MVU.
+          # Recall layer: default-off, direct session API, duplicate-channel coordination, and no MVU writes.
           grep -q "let enabled = false" experimental/recall_safe.js
           grep -q "PROMPT_KEY = 'vab_cold_recall'" experimental/recall_safe.js
           grep -q "detectMacroPlacement" experimental/recall_safe.js
@@ -89,6 +104,7 @@ jobs:
           grep -q "setExtensionPrompt" experimental/recall_safe.js
           grep -q "removeListener" experimental/recall_safe.js
           grep -q "clearInjection" experimental/recall_safe.js
+          grep -q "setRecallEnabledSession" experimental/recall_safe.js
           grep -q "legacy-macro" experimental/recall_delivery_core.js
           grep -q "blocked-collision" experimental/recall_delivery_core.js
           ! grep -q "replaceMvuData" experimental/recall_safe.js
@@ -97,6 +113,8 @@ jobs:
 
           # Read-only rehydration core/UI stay read-only; transaction engine itself is dependency-injected.
           grep -q "merge-hot-over-cold" experimental/rehydration_core.js
+          grep -q "autoConservative" experimental/rehydration_transaction.js
+          grep -q "auto-conservative-hot-authoritative" experimental/rehydration_transaction.js
           grep -q "只读" experimental/rehydration_safe.js
           grep -q "rollbackSafely" experimental/rehydration_transaction.js
           grep -q "scope-changed" experimental/rehydration_transaction.js
@@ -111,7 +129,7 @@ jobs:
           ! grep -q "indexedDB" experimental/rehydration_transaction.js
           ! grep -q "window.Mvu" experimental/rehydration_transaction.js
 
-          # Live rehydration writer is isolated behind two manual gates and never arms persistently.
+          # Live rehydration adapter remains guarded and contract-tested even though its manual UI is not mounted by the minimal loader.
           grep -q "let armed = false" experimental/rehydration_live_safe.js
           grep -q "executeOne" experimental/rehydration_live_safe.js
           grep -q "confirm" experimental/rehydration_live_safe.js
@@ -126,12 +144,55 @@ jobs:
           grep -q "竞态" experimental/rehydration_live_adapter.js
           grep -q "Dependency injection exists for CI contract tests" experimental/rehydration_live_adapter.js
 
-          # Production startup remains inert. Candidate code may only be dynamically imported by the explicit safety gate.
-          grep -q "import('./experimental/smart_host_safe.js')" safe_loader.js
+          # Unified lifecycle: session-only, direct API, event-driven, mention-only restore suppressed, automatic reactivation conservative.
+          grep -q "let enabled = false" experimental/auto_lifecycle_safe.js
+          grep -q "setLifecycleEnabledSession" experimental/auto_lifecycle_safe.js
+          grep -q "skipConfirm" experimental/auto_lifecycle_safe.js
+          grep -q "updateRehydrationObservations" experimental/auto_lifecycle_safe.js
+          grep -q "executeRehydrationTransaction(io, recordId, { autoConservative: true })" experimental/auto_lifecycle_safe.js
+          grep -q "当前热MVU为唯一权威" experimental/auto_lifecycle_safe.js
+          grep -q "archiveChild" experimental/auto_lifecycle_safe.js
+          grep -q "MAX_ERRORS_IN_WINDOW" experimental/auto_lifecycle_safe.js
+          grep -q "mention-only-restore" experimental/auto_lifecycle_core.js
+          grep -q "Prompt召回" experimental/auto_lifecycle_core.js
+          ! grep -q "restoreArchive" experimental/auto_lifecycle_safe.js
+          ! grep -q "setInterval([^\n]*runCycle" experimental/auto_lifecycle_safe.js
+          ! grep -q "localStorage.setItem.*enabled" experimental/auto_lifecycle_safe.js
+
+          # Unified memory master: one confirmation, direct child APIs, event health + low-frequency watchdog, fail-closed.
+          grep -q "let masterEnabled = false" experimental/memory_master_safe.js
+          grep -q "setRecallEnabledSession" experimental/memory_master_safe.js
+          grep -q "setLifecycleEnabledSession" experimental/memory_master_safe.js
+          grep -q "skipConfirm: true" experimental/memory_master_safe.js
+          grep -q "enableMasterStack" experimental/memory_master_safe.js
+          grep -q "disableMasterStack" experimental/memory_master_safe.js
+          grep -q "assessMasterHealth" experimental/memory_master_safe.js
+          grep -q "HEALTH_WATCHDOG_MS = 15000" experimental/memory_master_safe.js
+          grep -q "scheduleHealthCheck" experimental/memory_master_safe.js
+          grep -q "fail-closed" experimental/memory_master_safe.js
+          grep -q "Prompt召回" experimental/memory_master_core.js
+          grep -q "lifecycle" experimental/memory_master_core.js
+          ! grep -q "driveToggle" experimental/memory_master_safe.js
+          ! grep -q "dispatchEvent" experimental/memory_master_safe.js
+          ! grep -q "localStorage.setItem.*masterEnabled" experimental/memory_master_safe.js
+          ! grep -q "replaceMvuData" experimental/memory_master_safe.js
+          ! grep -q "archiveChild" experimental/memory_master_safe.js
+          ! grep -q "restoreArchive" experimental/memory_master_safe.js
+          ! grep -q "indexedDB" experimental/memory_master_safe.js
+
+          # RC safety gate loads only the minimal canary stack after explicit click.
           grep -q "import('./experimental/recall_safe.js')" safe_loader.js
-          grep -q "import('./experimental/rehydration_safe.js')" safe_loader.js
-          grep -q "import('./experimental/rehydration_live_safe.js')" safe_loader.js
-          ! grep -q "import './experimental/smart_host_safe.js'" bootstrap.js
+          grep -q "import('./experimental/auto_lifecycle_safe.js')" safe_loader.js
+          grep -q "import('./experimental/memory_master_safe.js')" safe_loader.js
+          grep -q "id=\"vab-rc-host\"" safe_loader.js
+          ! grep -q "import('./experimental/smart_host_safe.js')" safe_loader.js
+          ! grep -q "import('./experimental/rehydration_safe.js')" safe_loader.js
+          ! grep -q "import('./experimental/rehydration_live_safe.js')" safe_loader.js
+
+          # Production startup remains inert: no experimental candidate imported by bootstrap.
+          ! grep -q "smart_host_safe" bootstrap.js
           ! grep -q "recall_safe" bootstrap.js
           ! grep -q "rehydration_safe" bootstrap.js
           ! grep -q "rehydration_live_safe" bootstrap.js
+          ! grep -q "auto_lifecycle_safe" bootstrap.js
+          ! grep -q "memory_master_safe" bootstrap.js

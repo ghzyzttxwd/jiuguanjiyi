@@ -98,6 +98,40 @@ export async function executeRehydrationTransaction(io, recordId, options = {}) 
     return { status: 'noop', reason: '目标节点当前并未重新成为热变量', recordId, scopeKey };
   }
 
+  // Automatic lifecycle mode is deliberately more conservative than the manual transaction UI.
+  // A generic plugin cannot know whether a cold-only field is durable history or intentionally obsolete state.
+  // Therefore automatic reactivation never resurrects cold-only fields into MVU. It re-checks current hot state,
+  // treats hot as authoritative, and only closes the old cold version. Manual rehydration can still perform a merge.
+  if (options.autoConservative && plan.action === 'merge-hot-over-cold' && !jsonEqual(plan.merged, plan.hot)) {
+    const fresh = await guardedRefresh(io, scopeKey, '自动收口前复核');
+    const freshRecord = await io.getArchive(recordId, scopeKey);
+    if (!freshRecord || freshRecord.status !== 'archived') {
+      return { status: 'noop', reason: '自动收口前档案状态已变化', recordId, scopeKey };
+    }
+    const freshPlan = planReactivatedRecord(freshRecord, fresh.statData, options);
+    if (!freshPlan) {
+      return { status: 'noop', reason: '自动收口前热节点已消失', recordId, scopeKey };
+    }
+    if (freshPlan.action === 'merge-hot-over-cold' && !jsonEqual(freshPlan.merged, freshPlan.hot)) {
+      await io.markRestored(freshRecord, {
+        mode: 'auto-conservative-hot-authoritative',
+        pointer: freshPlan.pointer,
+        coldOnlyFieldsSkipped: Number(freshPlan.diff?.coldOnly || 0),
+        changedFields: Number(freshPlan.diff?.changed || 0),
+      });
+      return {
+        status: 'restored-without-write',
+        mode: 'auto-conservative-hot-authoritative',
+        pointer: freshPlan.pointer,
+        scopeKey,
+        wroteMvu: false,
+        skippedColdMerge: true,
+        coldOnlyFieldsSkipped: Number(freshPlan.diff?.coldOnly || 0),
+      };
+    }
+    plan = freshPlan;
+  }
+
   // Cases that need no MVU mutation: current hot state is already authoritative.
   if (plan.action === 'mark-restored' || plan.action === 'keep-hot-mark-restored' || jsonEqual(plan.merged, plan.hot)) {
     await guardedRefresh(io, scopeKey, '标记前');
