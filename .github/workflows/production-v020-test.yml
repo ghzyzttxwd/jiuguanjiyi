@@ -36,7 +36,7 @@ jobs:
           set -euo pipefail
           grep -q "import './production_auto.js'" bootstrap.js
           grep -q '"version": "0.2.0"' manifest.json
-          grep -q '"auto_update": true' manifest.json
+          grep -q '"auto_update": false' manifest.json
           grep -q "START_DELAY_MS = 4500" production_auto.js
           grep -q "decideAutoStart" production_auto.js
           grep -q "beginBoot" production_auto.js
