@@ -1,12 +1,13 @@
-// Variable Archive Bridge v0.7.0 automatic cooling scheduler.
-// Event-driven only: waits for a new stable message, asks the v0.6 safe executor for a plan,
-// and executes at most one old/cold candidate when conservative policy allows it.
-// It never writes MVU directly and never calls archiveChild itself.
+// Variable Archive Bridge v0.8.0 automatic governance scheduler.
+// Event-driven only: after a new stable message, it may execute ONE verified transaction:
+// internal-history compaction first when a hard limit is exceeded, otherwise ordinary object cooling.
+// The scheduler itself never writes MVU; writes are delegated to the dedicated transactional executors.
 
 import { evaluateAutoCooling, DEFAULT_AUTO_COOLING_POLICY } from './auto_cooling_scheduler_core.js';
+import { evaluateAutoHistoryCompaction, HISTORY_COMPACTION_POLICY } from './history_compaction_core.js';
 import { isGenerationActive } from './experimental/rehydration_live_adapter.js';
 
-const VERSION = '0.7.0';
+const VERSION = '0.8.0';
 const SETTLE_MS = 2600;
 const ERROR_WINDOW_MS = 10 * 60 * 1000;
 const MAX_ERRORS_IN_WINDOW = 3;
@@ -34,6 +35,11 @@ function core() {
 
 function executor() {
   try { return window.VariableArchiveBridgeSafeCooling || window.parent?.VariableArchiveBridgeSafeCooling || null; }
+  catch { return null; }
+}
+
+function historyExecutor() {
+  try { return window.VariableArchiveBridgeHistoryCompactor || window.parent?.VariableArchiveBridgeHistoryCompactor || null; }
   catch { return null; }
 }
 
@@ -88,7 +94,7 @@ function hookEvents() {
   const generationStarted = () => {
     generationFlag = true;
     clearTimer();
-    if (enabled) statusText = '模型生成中 · 自动降温暂停';
+    if (enabled) statusText = '模型生成中 · 自动治理暂停';
   };
   const generationEnded = () => {
     generationFlag = false;
@@ -121,12 +127,15 @@ function unhookEvents() {
 }
 
 async function runCycle({ previewOnly = false } = {}) {
-  if (busy) return { status: 'hold', reason: '自动降温调度器忙' };
-  if (!enabled && !previewOnly) return { status: 'hold', reason: '自动降温未启用' };
+  if (busy) return { status: 'hold', reason: '自动治理调度器忙' };
+  if (!enabled && !previewOnly) return { status: 'hold', reason: '自动治理未启用' };
   busy = true;
   try {
     const ex = executor();
+    const hx = historyExecutor();
     if (!ex?.plan || !ex?.executeOne) throw new Error('安全降温执行器尚未就绪');
+    if (!hx?.plan || !hx?.executeOne) throw new Error('内部历史压缩执行器尚未就绪');
+
     const activeGeneration = generationFlag || await isGenerationActive();
     const currentScope = scopeKey();
     if (!currentScope) return { status: 'hold', reason: '当前没有MVU作用域' };
@@ -137,6 +146,36 @@ async function runCycle({ previewOnly = false } = {}) {
     }
     lastScopeKey = currentScope;
 
+    // 1) Hard-overflow internal history gets first priority. It only removes an old prefix,
+    // keeps recent items hot, and for generic inferred arrays requires learned append-at-end evidence.
+    const historyPlan = await hx.plan();
+    const historyDecision = evaluateAutoHistoryCompaction({
+      enabled: enabled || previewOnly,
+      generationActive: activeGeneration,
+      messageCount: messageCount(),
+      armedMessageCount,
+      plan: historyPlan,
+      policy: HISTORY_COMPACTION_POLICY,
+    });
+    if (historyDecision.allow) {
+      if (previewOnly) {
+        lastResult = { status: 'ready', type: 'history-segment', reason: historyDecision.reason, candidate: historyPlan.candidate, previewOnly: true };
+        statusText = `只读可执行历史压缩：${historyPlan.candidate.arrayPath}`;
+        return lastResult;
+      }
+      const result = await hx.executeOne();
+      lastResult = result;
+      if (result?.status === 'committed') {
+        errorTimes = [];
+        statusText = `✅ 内部历史已降温：${result.ownerKey} · ${result.label} · ${result.movedItems}条`;
+        return result;
+      }
+      if (result?.status === 'error') return recordError(result.reason || '内部历史压缩失败');
+      statusText = `待机：${result?.reason || result?.status || '历史执行器未提交'}`;
+      return result;
+    }
+
+    // 2) Otherwise run the existing whole-object cooling path.
     const plan = await ex.plan();
     const decision = evaluateAutoCooling({
       enabled: enabled || previewOnly,
@@ -148,12 +187,14 @@ async function runCycle({ previewOnly = false } = {}) {
     });
 
     if (!decision.allow) {
-      lastResult = { status: 'hold', reason: decision.reason, candidate: plan?.candidate || null };
-      statusText = `待机：${decision.reason}`;
+      const historyReason = historyPlan?.status === 'hold' ? historyPlan.reason : historyDecision.reason;
+      const ordinaryReason = decision.reason;
+      lastResult = { status: 'hold', reason: ordinaryReason, historyReason, candidate: plan?.candidate || null };
+      statusText = `待机：${ordinaryReason}${historyReason && !/当前没有/.test(historyReason) ? ` · 历史:${historyReason}` : ''}`;
       return lastResult;
     }
     if (previewOnly) {
-      lastResult = { status: 'ready', reason: decision.reason, candidate: plan.candidate, previewOnly: true };
+      lastResult = { status: 'ready', type: 'object', reason: decision.reason, candidate: plan.candidate, previewOnly: true };
       statusText = `只读可执行：${plan.candidate.pointer}`;
       return lastResult;
     }
@@ -163,6 +204,8 @@ async function runCycle({ previewOnly = false } = {}) {
     if (result?.status === 'committed') {
       errorTimes = [];
       statusText = `✅ 自动降温完成：${result.pointer}`;
+    } else if (result?.status === 'error') {
+      return recordError(result.reason || '自动降温失败');
     } else {
       statusText = `待机：${result?.reason || result?.status || '执行器未提交'}`;
     }
@@ -179,12 +222,12 @@ export async function setAutoCoolingEnabled(value) {
   if (!next) {
     enabled = false;
     clearTimer();
-    statusText = '自动降温已关闭';
+    statusText = '自动治理已关闭';
     return enabled;
   }
   if (await isGenerationActive()) {
     enabled = false;
-    statusText = '模型正在生成，暂不启用自动降温';
+    statusText = '模型正在生成，暂不启用自动治理';
     return enabled;
   }
   hookEvents();
@@ -222,8 +265,10 @@ window.VariableArchiveBridgeAutoCooling = {
     lastResult: lastResult ? structuredClone(lastResult) : null,
     recentErrors: errorTimes.length,
     policy: { ...DEFAULT_AUTO_COOLING_POLICY },
+    historyPolicy: { ...HISTORY_COMPACTION_POLICY },
     eventDriven: true,
     directMvuWrites: false,
-    maxItemsPerCycle: 1,
+    maxTransactionsPerCycle: 1,
+    internalHistoryCompaction: true,
   }),
 };
