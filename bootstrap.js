@@ -1,5 +1,5 @@
-// Variable Archive Bridge v0.3.0 bootstrap
-// Stable archive core + hot-presence reconciliation + smart path scanner + automatic memory lifecycle + read-only hot-state governance.
+// Variable Archive Bridge v0.3.1 bootstrap
+// Universal MVU archive + recall + read-only hot-state governance for variable cards.
 
 import './index.js';
 import './hot_archive_reconcile.js';
