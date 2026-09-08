@@ -1,4 +1,4 @@
-name: VAB Production v0.4 Tests
+name: VAB Production v0.5 Tests
 
 on:
   push:
@@ -12,6 +12,8 @@ on:
       - 'hot_state_governor.js'
       - 'hot_state_governor_core.js'
       - 'hot_state_preview_core.js'
+      - 'warm_catalog.js'
+      - 'warm_catalog_core.js'
       - 'self_update.js'
       - 'self_update_core.js'
       - 'manifest.json'
@@ -39,6 +41,8 @@ jobs:
           node --check hot_state_governor.js
           node --check hot_state_governor_core.js
           node --check hot_state_preview_core.js
+          node --check warm_catalog.js
+          node --check warm_catalog_core.js
           node --check self_update.js
           node --check self_update_core.js
           node --check production_auto.js
@@ -92,6 +96,25 @@ jobs:
           if (!detectMainGod(mainGod)) throw new Error('main-god adapter not detected');
           console.log('universal governor and cooling preview ok');
           JS
+      - name: Warm catalog merge behavior
+        run: |
+          node --input-type=module <<'JS'
+          import { buildCatalogEntries, buildDirectoryContext } from './warm_catalog_core.js';
+          const statData = { 玩家:{ 武学:{ 凝血神剑:{境界:'小成'}, 凌波微步:{境界:'入门'} } } };
+          const report = { collections:[{ path:'/玩家/武学', label:'武学' }] };
+          const preview = { collections:[{ path:'/玩家/武学', cooling:[] }] };
+          const archives = [
+            { id:'arc_1', status:'archived', sourcePath:'/玩家/武学', childKey:'紫霞神功', summary:'紫霞神功｜境界:大成', size:333 },
+            { id:'arc_old', status:'archived', sourcePath:'/玩家/武学', childKey:'凝血神剑', summary:'旧凝血神剑', size:999 },
+          ];
+          const entries = buildCatalogEntries({ statData, report, preview, archives, scopeKey:'scope1', scopeLabel:'测试' });
+          if (entries.length !== 3) throw new Error(`expected 3 catalog entries, got ${entries.length}`);
+          if (entries.find(x => x.childKey === '凝血神剑')?.temperature !== 'hot') throw new Error('hot MVU must override stale cold archive');
+          if (entries.find(x => x.childKey === '紫霞神功')?.temperature !== 'cold') throw new Error('cold archive missing');
+          const ctx = buildDirectoryContext(entries, '我会哪些武学？');
+          if (!ctx.includes('凝血神剑') || !ctx.includes('紫霞神功[冷]')) throw new Error('directory context incomplete');
+          console.log('warm catalog behavior ok');
+          JS
       - name: One-time archive selector behavior
         run: |
           node --input-type=module <<'JS'
@@ -109,12 +132,14 @@ jobs:
           grep -q "import './hot_archive_reconcile.js'" bootstrap.js
           grep -q "import './production_auto.js'" bootstrap.js
           grep -q "import './hot_state_governor.js'" bootstrap.js
+          grep -q "import './warm_catalog.js'" bootstrap.js
           grep -q "import './self_update.js'" bootstrap.js
           ! grep -q "lifecycle_watchdog.js" bootstrap.js
-          grep -q '"version": "0.4.1"' manifest.json
+          grep -q '"version": "0.5.0"' manifest.json
           grep -q '"auto_update": true' manifest.json
           grep -q "const VERSION = '0.4.0'" hot_state_governor.js
-          grep -q "const CURRENT_VERSION = '0.4.1'" self_update.js
+          grep -q "const VERSION = '0.5.0'" warm_catalog.js
+          grep -q "const CURRENT_VERSION = '0.5.0'" self_update.js
           grep -q "VariableArchiveBridgeMvuRecovery" mvu_recovery.js
           grep -q "readOnly: true" mvu_recovery.js
           ! grep -q "replaceMvuData\|archiveChild\|restoreArchive\|putArchive" mvu_recovery.js
@@ -122,6 +147,9 @@ jobs:
           grep -q "warmIndex" hot_state_preview_core.js
           grep -q "readOnly: true" hot_state_preview_core.js
           ! grep -q "replaceMvuData\|archiveChild\|restoreArchive\|putArchive" hot_state_governor.js hot_state_preview_core.js
+          grep -q "recordType: 'warm-catalog'" warm_catalog_core.js
+          grep -q "varArchiveCatalog" warm_catalog.js
+          ! grep -q "replaceMvuData\|archiveChild\|restoreArchive" warm_catalog.js warm_catalog_core.js
           grep -q "selectHotArchiveMatches" hot_archive_reconcile.js
           grep -q "status: 'restored'" hot_archive_reconcile.js
           grep -q "hotAuthoritative: true" hot_archive_reconcile.js
@@ -134,7 +162,7 @@ jobs:
           grep -q "'/api/extensions/update'" self_update.js
           grep -q "'/api/extensions/switch'" self_update.js
           ! grep -q "'/api/extensions/delete'\|'/api/extensions/install'" self_update.js
-          ! grep -q "new MutationObserver" mvu_recovery.js hot_archive_reconcile.js bootstrap.js production_auto.js hot_state_governor.js self_update.js
+          ! grep -q "new MutationObserver" mvu_recovery.js hot_archive_reconcile.js bootstrap.js production_auto.js hot_state_governor.js warm_catalog.js self_update.js
           grep -q "START_DELAY_MS = 4500" production_auto.js
           grep -q "HEALTH_WATCHDOG_MS = 15000" production_auto.js
           grep -q "fail-closed" production_auto.js
