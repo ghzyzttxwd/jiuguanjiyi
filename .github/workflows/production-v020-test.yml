@@ -1,4 +1,4 @@
-name: VAB Production v0.7 Tests
+name: VAB Production v0.8 Tests
 
 on:
   push:
@@ -16,6 +16,8 @@ on:
       - 'warm_catalog_core.js'
       - 'safe_cooling_executor.js'
       - 'safe_cooling_core.js'
+      - 'history_compaction_executor.js'
+      - 'history_compaction_core.js'
       - 'auto_cooling_scheduler.js'
       - 'auto_cooling_scheduler_core.js'
       - 'macro_mux.js'
@@ -54,6 +56,8 @@ jobs:
           node --check warm_catalog_core.js
           node --check safe_cooling_executor.js
           node --check safe_cooling_core.js
+          node --check history_compaction_executor.js
+          node --check history_compaction_core.js
           node --check auto_cooling_scheduler.js
           node --check auto_cooling_scheduler_core.js
           node --check macro_mux.js
@@ -117,6 +121,43 @@ jobs:
           console.log('universal governor and cooling preview ok');
           JS
 
+      - name: Internal history compaction behavior
+        run: |
+          node --input-type=module <<'JS'
+          import {
+            selectHistoryCompactionPlan,
+            validateHistoryPlanCurrent,
+            validateHistoryPost,
+            evaluateAutoHistoryCompaction,
+          } from './history_compaction_core.js';
+
+          const items = Array.from({length:17}, (_,i) => ({事件:`经历${i+1}`}));
+          const statData = { 长期人物:{ 小龙女:{ 共同经历:items } } };
+          const baseRow = {
+            containerPath:'/长期人物', ownerKey:'小龙女', fieldPath:'/共同经历', label:'共同经历',
+            count:17, softLimit:8, keep:8, hardLimit:16, level:'hard', inferred:false,
+          };
+          let candidate = selectHistoryCompactionPlan({ preview:{histories:[baseRow]}, statData });
+          if (!candidate || candidate.removeCount !== 6 || candidate.afterCount !== 11) throw new Error('history segment selection failed');
+          if (candidate.removedItems[0].事件 !== '经历1' || candidate.expectedRemaining[0].事件 !== '经历7') throw new Error('must remove oldest prefix only');
+          if (!validateHistoryPlanCurrent(candidate, statData).ok) throw new Error('pre validation failed');
+          const after = { 长期人物:{ 小龙女:{ 共同经历:items.slice(6) } } };
+          if (!validateHistoryPost(candidate, after).ok) throw new Error('post validation failed');
+
+          const inferred = {...baseRow, inferred:true};
+          if (selectHistoryCompactionPlan({ preview:{histories:[inferred]}, statData, appendEvidence:{'/长期人物/小龙女/共同经历':1} })) throw new Error('generic inferred history must wait for append-order evidence');
+          candidate = selectHistoryCompactionPlan({ preview:{histories:[inferred]}, statData, appendEvidence:{'/长期人物/小龙女/共同经历':2} });
+          if (!candidate) throw new Error('learned append-end generic history should become eligible');
+
+          let d = evaluateAutoHistoryCompaction({enabled:true,generationActive:false,messageCount:30,armedMessageCount:29,plan:{status:'ready',candidate}});
+          if (!d.allow) throw new Error(d.reason);
+          d = evaluateAutoHistoryCompaction({enabled:true,generationActive:false,messageCount:30,armedMessageCount:30,plan:{status:'ready',candidate}});
+          if (d.allow) throw new Error('history compaction must wait for new stable message after arming');
+          d = evaluateAutoHistoryCompaction({enabled:true,generationActive:true,messageCount:30,armedMessageCount:20,plan:{status:'ready',candidate}});
+          if (d.allow) throw new Error('generation must block history compaction');
+          console.log('internal history compaction behavior ok');
+          JS
+
       - name: Warm catalog merge behavior
         run: |
           node --input-type=module <<'JS'
@@ -127,9 +168,11 @@ jobs:
           const archives = [
             { id:'arc_1', status:'archived', sourcePath:'/玩家/武学', childKey:'紫霞神功', summary:'紫霞神功｜境界:大成', size:333 },
             { id:'arc_old', status:'archived', sourcePath:'/玩家/武学', childKey:'凝血神剑', summary:'旧凝血神剑', size:999 },
+            { id:'hist_1', status:'archived', recordType:'history-segment', sourcePath:'/长期人物/小龙女/共同经历', childKey:'小龙女·共同经历', summary:'旧经历', size:500 },
           ];
           const entries = buildCatalogEntries({ statData, report, preview, archives, scopeKey:'scope1', scopeLabel:'测试' });
-          if (entries.length !== 3) throw new Error(`expected 3 catalog entries, got ${entries.length}`);
+          if (entries.length !== 3) throw new Error(`expected 3 entity catalog entries, got ${entries.length}`);
+          if (entries.find(x => x.childKey === '小龙女·共同经历')) throw new Error('history segment must not pollute entity directory');
           if (entries.find(x => x.childKey === '凝血神剑')?.temperature !== 'hot') throw new Error('hot MVU must override stale cold archive');
           if (entries.find(x => x.childKey === '紫霞神功')?.temperature !== 'cold') throw new Error('cold archive missing');
           const ctx = buildDirectoryContext(entries, '我会哪些武学？');
@@ -180,17 +223,24 @@ jobs:
           grep -q "import './unified_runtime.js'" bootstrap.js
           ! grep -q "import './production_auto.js'" bootstrap.js
           grep -q "import './safe_cooling_executor.js'" bootstrap.js
+          grep -q "import './history_compaction_executor.js'" bootstrap.js
           grep -q "import './warm_catalog.js'" bootstrap.js
-          grep -q '"version": "0.7.0"' manifest.json
+          grep -q '"version": "0.8.0"' manifest.json
           grep -q '"auto_update": true' manifest.json
-          grep -q "const VERSION = '0.7.0'" auto_cooling_scheduler.js
+          grep -q "const VERSION = '0.8.0'" auto_cooling_scheduler.js
+          grep -q "const VERSION = '0.8.0'" history_compaction_executor.js
           grep -q "minMessagesBeforeAuto: 20" auto_cooling_scheduler_core.js
-          grep -q "minIdleMessagesSoft: 16" auto_cooling_scheduler_core.js
-          grep -q "maxItemsPerCycle: 1" auto_cooling_scheduler.js
+          grep -q "minMessagesBeforeAuto: 20" history_compaction_core.js
+          grep -q "requiredAppendEvidenceForInferred: 2" history_compaction_core.js
+          grep -q "maxTransactionsPerCycle: 1" auto_cooling_scheduler.js
           grep -q "armedMessageCount = messageCount()" auto_cooling_scheduler.js
-          grep -q "executeOne" auto_cooling_scheduler.js
-          ! grep -q "\.archiveChild" auto_cooling_scheduler.js
-          ! grep -q "replaceMvuData" auto_cooling_scheduler.js auto_cooling_scheduler_core.js unified_runtime.js
+          grep -q "historyExecutor" auto_cooling_scheduler.js
+          grep -q "saveSnapshot?.('before-auto-history-compact')" history_compaction_executor.js
+          grep -q "status: 'pending'" history_compaction_executor.js
+          grep -q "rollbackTargetArray" history_compaction_executor.js
+          grep -q "recordType: 'history-segment'" history_compaction_executor.js
+          ! grep -q "\.archiveChild" auto_cooling_scheduler.js history_compaction_executor.js
+          ! grep -q "replaceMvuData" auto_cooling_scheduler.js auto_cooling_scheduler_core.js history_compaction_core.js unified_runtime.js
           grep -q "import('./experimental/recall_safe.js')" unified_runtime.js
           ! grep -q "auto_lifecycle_safe.js" unified_runtime.js
           grep -q "START_DELAY_MS = 4500" unified_runtime.js
@@ -198,11 +248,12 @@ jobs:
           grep -q "status: 'restored'" hot_archive_reconcile.js
           grep -q "hotAuthoritative: true" hot_archive_reconcile.js
           grep -q "recordType: 'warm-catalog'" warm_catalog_core.js
+          grep -q "recordType === 'history-segment'" warm_catalog_core.js
           grep -q "automaticEnabled: false" safe_cooling_executor.js
           grep -q "maxItemsPerRun: 1" safe_cooling_executor.js
-          grep -q "const CURRENT_VERSION = '0.7.0'" self_update.js
-          grep -q "const FALLBACK_VERSION = '0.7.0'" ui_version_surface.js
-          ! grep -q "new MutationObserver" bootstrap.js unified_runtime.js mvu_recovery.js hot_archive_reconcile.js hot_state_governor.js warm_catalog.js safe_cooling_executor.js auto_cooling_scheduler.js self_update.js ui_version_surface.js
+          grep -q "const CURRENT_VERSION = '0.8.0'" self_update.js
+          grep -q "const FALLBACK_VERSION = '0.8.0'" ui_version_surface.js
+          ! grep -q "new MutationObserver" bootstrap.js unified_runtime.js mvu_recovery.js hot_archive_reconcile.js hot_state_governor.js warm_catalog.js safe_cooling_executor.js history_compaction_executor.js auto_cooling_scheduler.js self_update.js ui_version_surface.js
           ! grep -q "'/api/extensions/delete'\|'/api/extensions/install'" self_update.js
 
       - name: Import graph
