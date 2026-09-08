@@ -76,6 +76,8 @@ jobs:
             echo 'Forbidden MutationObserver found in active or candidate UI code.'
             exit 1
           fi
+
+          # Legacy smart-host candidate remains event-driven and default-off if imported for diagnostics.
           grep -q "enabled = false" experimental/smart_host_safe.js
           grep -q "if (!cfg.enabled)" experimental/smart_host_safe.js
           grep -q "generationActive" experimental/smart_host_safe.js
@@ -90,7 +92,7 @@ jobs:
             exit 1
           fi
 
-          # Recall layer must be isolated, default-off, coordinate duplicate channels, clear only its own prompt, and never write MVU.
+          # Recall layer: default-off, direct session API, duplicate-channel coordination, and no MVU writes.
           grep -q "let enabled = false" experimental/recall_safe.js
           grep -q "PROMPT_KEY = 'vab_cold_recall'" experimental/recall_safe.js
           grep -q "detectMacroPlacement" experimental/recall_safe.js
@@ -99,6 +101,7 @@ jobs:
           grep -q "setExtensionPrompt" experimental/recall_safe.js
           grep -q "removeListener" experimental/recall_safe.js
           grep -q "clearInjection" experimental/recall_safe.js
+          grep -q "setRecallEnabledSession" experimental/recall_safe.js
           grep -q "legacy-macro" experimental/recall_delivery_core.js
           grep -q "blocked-collision" experimental/recall_delivery_core.js
           ! grep -q "replaceMvuData" experimental/recall_safe.js
@@ -121,7 +124,7 @@ jobs:
           ! grep -q "indexedDB" experimental/rehydration_transaction.js
           ! grep -q "window.Mvu" experimental/rehydration_transaction.js
 
-          # Live rehydration writer is isolated behind two manual gates and never arms persistently.
+          # Live rehydration adapter remains guarded and contract-tested even though its manual UI is not mounted by the minimal loader.
           grep -q "let armed = false" experimental/rehydration_live_safe.js
           grep -q "executeOne" experimental/rehydration_live_safe.js
           grep -q "confirm" experimental/rehydration_live_safe.js
@@ -136,8 +139,10 @@ jobs:
           grep -q "竞态" experimental/rehydration_live_adapter.js
           grep -q "Dependency injection exists for CI contract tests" experimental/rehydration_live_adapter.js
 
-          # Unified lifecycle candidate: session-only, event-driven, never hard-restores a cold record on mention.
+          # Unified lifecycle: session-only, direct API, event-driven, never hard-restores a cold record on mention.
           grep -q "let enabled = false" experimental/auto_lifecycle_safe.js
+          grep -q "setLifecycleEnabledSession" experimental/auto_lifecycle_safe.js
+          grep -q "skipConfirm" experimental/auto_lifecycle_safe.js
           grep -q "updateRehydrationObservations" experimental/auto_lifecycle_safe.js
           grep -q "executeRehydrationTransaction" experimental/auto_lifecycle_safe.js
           grep -q "archiveChild" experimental/auto_lifecycle_safe.js
@@ -148,28 +153,38 @@ jobs:
           ! grep -q "setInterval([^\n]*runCycle" experimental/auto_lifecycle_safe.js
           ! grep -q "localStorage.setItem.*enabled" experimental/auto_lifecycle_safe.js
 
-          # Unified memory master: one session-only switch, recall first / writer second, rollback on partial enable, fail-closed on child failure.
+          # Unified memory master: one confirmation, direct child APIs, event health + low-frequency watchdog, fail-closed.
           grep -q "let masterEnabled = false" experimental/memory_master_safe.js
+          grep -q "setRecallEnabledSession" experimental/memory_master_safe.js
+          grep -q "setLifecycleEnabledSession" experimental/memory_master_safe.js
+          grep -q "skipConfirm: true" experimental/memory_master_safe.js
           grep -q "enableMasterStack" experimental/memory_master_safe.js
           grep -q "disableMasterStack" experimental/memory_master_safe.js
           grep -q "assessMasterHealth" experimental/memory_master_safe.js
+          grep -q "HEALTH_WATCHDOG_MS = 15000" experimental/memory_master_safe.js
+          grep -q "scheduleHealthCheck" experimental/memory_master_safe.js
           grep -q "fail-closed" experimental/memory_master_safe.js
           grep -q "Prompt召回" experimental/memory_master_core.js
           grep -q "lifecycle" experimental/memory_master_core.js
+          ! grep -q "driveToggle" experimental/memory_master_safe.js
+          ! grep -q "dispatchEvent" experimental/memory_master_safe.js
           ! grep -q "localStorage.setItem.*masterEnabled" experimental/memory_master_safe.js
           ! grep -q "replaceMvuData" experimental/memory_master_safe.js
           ! grep -q "archiveChild" experimental/memory_master_safe.js
           ! grep -q "restoreArchive" experimental/memory_master_safe.js
           ! grep -q "indexedDB" experimental/memory_master_safe.js
 
-          # Production startup remains inert. Candidate code may only be dynamically imported by the explicit safety gate.
-          grep -q "import('./experimental/smart_host_safe.js')" safe_loader.js
+          # RC safety gate loads only the minimal canary stack after explicit click.
           grep -q "import('./experimental/recall_safe.js')" safe_loader.js
-          grep -q "import('./experimental/rehydration_safe.js')" safe_loader.js
-          grep -q "import('./experimental/rehydration_live_safe.js')" safe_loader.js
           grep -q "import('./experimental/auto_lifecycle_safe.js')" safe_loader.js
           grep -q "import('./experimental/memory_master_safe.js')" safe_loader.js
-          ! grep -q "import './experimental/smart_host_safe.js'" bootstrap.js
+          grep -q "id=\"vab-rc-host\"" safe_loader.js
+          ! grep -q "import('./experimental/smart_host_safe.js')" safe_loader.js
+          ! grep -q "import('./experimental/rehydration_safe.js')" safe_loader.js
+          ! grep -q "import('./experimental/rehydration_live_safe.js')" safe_loader.js
+
+          # Production startup remains inert: no experimental candidate imported by bootstrap.
+          ! grep -q "smart_host_safe" bootstrap.js
           ! grep -q "recall_safe" bootstrap.js
           ! grep -q "rehydration_safe" bootstrap.js
           ! grep -q "rehydration_live_safe" bootstrap.js
