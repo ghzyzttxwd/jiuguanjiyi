@@ -82,8 +82,12 @@ jobs:
           grep -q "snapshotVerified" experimental/one_time_archive_test.js
           grep -q "archiveVerified" experimental/one_time_archive_test.js
           grep -q "buildRehydrationPlans" experimental/lifecycle_watchdog.js
-          grep -q "setLifecycleEnabledSession(true, { skipConfirm: true })" experimental/lifecycle_watchdog.js
-          grep -q "POLL_MS = 6000" experimental/lifecycle_watchdog.js
+          grep -q "executeRehydrationTransaction" experimental/lifecycle_watchdog.js
+          grep -q "createRehydrationLiveIo" experimental/lifecycle_watchdog.js
+          grep -q "autoConservative: true" experimental/lifecycle_watchdog.js
+          grep -q "MIN_OBSERVATIONS = 2" experimental/lifecycle_watchdog.js
+          grep -q "POLL_MS = 5000" experimental/lifecycle_watchdog.js
+          ! grep -q "setLifecycleEnabledSession(true" experimental/lifecycle_watchdog.js
           ! grep -q "new MutationObserver" production_auto.js bootstrap.js experimental/one_time_archive_test.js experimental/one_time_archive_test_core.js experimental/lifecycle_watchdog.js
           ! grep -q "restoreArchive" production_auto.js experimental/one_time_archive_test.js experimental/lifecycle_watchdog.js
           grep -q "autoConservative: true" experimental/auto_lifecycle_safe.js
