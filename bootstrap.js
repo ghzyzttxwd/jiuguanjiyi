@@ -1,9 +1,9 @@
-// Variable Archive Bridge v0.1.4 bootstrap
-// Stable verified core + smart path scanner + inert safety gate.
+// Variable Archive Bridge v0.2.0 bootstrap
+// Stable core + smart path scanner + crash-safe automatic memory lifecycle.
 
 import './index.js';
 import './smart_scan.js';
-import './safe_loader.js';
+import './production_auto.js';
 
 (function installVabDrawerFix() {
     if (window.__VAB_DRAWER_FIX_INSTALLED__) return;
