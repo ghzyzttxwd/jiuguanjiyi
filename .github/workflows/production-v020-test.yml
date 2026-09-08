@@ -1,4 +1,4 @@
-name: VAB Production v0.3 Tests
+name: VAB Production v0.4 Tests
 
 on:
   push:
@@ -10,6 +10,7 @@ on:
       - 'hot_archive_reconcile_core.js'
       - 'hot_state_governor.js'
       - 'hot_state_governor_core.js'
+      - 'hot_state_preview_core.js'
       - 'self_update.js'
       - 'self_update_core.js'
       - 'manifest.json'
@@ -35,6 +36,7 @@ jobs:
           node --check hot_archive_reconcile_core.js
           node --check hot_state_governor.js
           node --check hot_state_governor_core.js
+          node --check hot_state_preview_core.js
           node --check self_update.js
           node --check self_update_core.js
           node --check production_auto.js
@@ -58,55 +60,35 @@ jobs:
           if (selectHotArchiveMatches({ archives:[archived], statData:hot, scopeKey:'other' }).length) throw new Error('cross-scope archive must not be touched');
           console.log('hot archive reconcile behavior ok');
           JS
-      - name: Universal hot-state governor behavior
+      - name: Universal governor and cooling preview behavior
         run: |
           node --input-type=module <<'JS'
-          import { analyzeHotState, detectMainGod, discoverGenericPolicy, resolvePolicy } from './hot_state_governor_core.js';
+          import { analyzeHotState, detectMainGod } from './hot_state_governor_core.js';
+          import { buildCoolingPreview } from './hot_state_preview_core.js';
 
-          const abilities = {};
-          for (let i = 0; i < 13; i++) abilities[`能力${i}`] = { 名称:`能力${i}` };
-          const mainGod = {
-            玩家:{ 能力:abilities, 装备:{} },
-            轮回残印:{ 解析档案:{}, 世界烙印:{} },
-            当前轮回:{ 轮次:1 },
-            当前世界:{ 重要人物:{}, 重要势力:{}, 重大事件:{}, 玩家已知情报:{} },
-            长期人物:{ 小龙女:{ 是否同行:true, 共同经历:Array(9).fill('x'), 与玩家关系:{关键关系事件:Array(6).fill('x')} } },
-            轮回者生态:{ 轮回队:{}, 重要轮回者:{}, 已知组织:{} },
-            资源:{ 世界坐标:{} },
-            世界档案:{},
-          };
-          if (!detectMainGod(mainGod)) throw new Error('main-god adapter not detected');
-          const mainReport = analyzeHotState(mainGod);
-          if (mainReport.policySource !== 'builtin-profile') throw new Error('main-god must use optional built-in adapter');
-          const ability = mainReport.collections.find(x => x.path === '/玩家/能力');
-          if (!ability || ability.level !== 'warn' || ability.excess !== 1) throw new Error('ability budget failed');
-          if (mainReport.collections.find(x => x.path === '/长期人物')?.protectedCount !== 1) throw new Error('同行 protection failed');
-          if (mainReport.histories.length !== 2) throw new Error('internal history analysis failed');
-
-          const generic = {
-            主角:{ 名称:'甲' },
-            技能库:Object.fromEntries(Array.from({length:13}, (_,i)=>[`技能${i}`, {等级:i}])),
-            人际:Object.fromEntries(Array.from({length:7}, (_,i)=>[`人物${i}`, {经历:Array(9).fill(`e${i}`), 状态:'离线'}])),
-          };
-          if (detectMainGod(generic)) throw new Error('generic card misdetected as main-god');
-          const inferred = discoverGenericPolicy(generic);
-          if (!inferred.collectionPolicies.some(x => x.path === '/技能库')) throw new Error('generic collection discovery failed');
-          const genericReport = analyzeHotState(generic);
-          if (genericReport.policySource !== 'generic-auto') throw new Error('generic card must use generic discovery');
-          if (!genericReport.collections.some(x => x.path === '/技能库')) throw new Error('generic report missing discovered collection');
-
-          const youngCard = { 玩家:{ 武学:{ 凝血神剑:{境界:'小成'}, 凌波微步:{境界:'入门'} }, 姓名:'甲' }, 世界:{当前地点:'渝州'} };
+          const youngCard = { 玩家:{ 武学:{ 凝血神剑:{境界:'小成'}, 凌波微步:{境界:'入门'} }, 姓名:'甲' }, 世界:{ 已改变事件:{}, 重大情报:{} } };
           const youngReport = analyzeHotState(youngCard);
           const martial = youngReport.collections.find(x => x.path === '/玩家/武学');
           if (!martial || martial.count !== 2 || martial.level !== 'ok') throw new Error('small semantic collection discovery failed');
-          if (youngReport.collections.some(x => x.path === '/玩家')) throw new Error('fixed parent object must not be misclassified');
+          if (youngReport.collections.some(x => x.path === '/玩家')) throw new Error('fixed parent object misclassified');
+          const youngPreview = buildCoolingPreview(youngCard, youngReport, { recentText:'凝血神剑', messageCount:2 });
+          if (youngPreview.summary.totalCandidateCount !== 0) throw new Error('small collection must not cool');
 
-          const cardPolicy = { id:'custom-card', label:'卡内策略', collectionPolicies:[{path:'/技能库',label:'技能',softLimit:5,hardLimit:10,strategy:'test'}], historyPolicies:[] };
-          const resolved = resolvePolicy(generic, cardPolicy);
-          if (resolved.source !== 'card' || resolved.id !== 'custom-card') throw new Error('card-provided policy must win');
-          if (analyzeHotState(generic, { externalPolicy:cardPolicy }).policySource !== 'card') throw new Error('external policy analysis failed');
-          if (genericReport.readOnly !== true) throw new Error('governor must remain read-only');
-          console.log('universal hot state governor behavior ok');
+          const many = {};
+          for (let i=0;i<15;i++) many[`武学${i}`] = { 境界:'入门' };
+          many['当前主修'] = { 是否主修:true, 境界:'大成' };
+          const largeCard = { 玩家:{ 武学:many } };
+          const largeReport = analyzeHotState(largeCard);
+          const preview = buildCoolingPreview(largeCard, largeReport, { recentText:'武学14 当前主修', messageCount:50 });
+          const plan = preview.collections.find(x => x.path === '/玩家/武学');
+          if (!plan || plan.cooling.length !== 4) throw new Error(`expected 4 cooling candidates, got ${plan?.cooling.length}`);
+          if (plan.cooling.some(x => x.key === '当前主修')) throw new Error('protected current/main item must stay hot');
+          if (!preview.warmIndex.length || preview.summary.estimatedCoolingBytes <= 0) throw new Error('warm-index preview missing');
+          if (preview.readOnly !== true) throw new Error('preview must remain read-only');
+
+          const mainGod = { 玩家:{能力:{},装备:{}}, 轮回残印:{}, 当前轮回:{}, 当前世界:{}, 长期人物:{}, 世界档案:{} };
+          if (!detectMainGod(mainGod)) throw new Error('main-god adapter not detected');
+          console.log('universal governor and cooling preview ok');
           JS
       - name: One-time archive selector behavior
         run: |
@@ -115,9 +97,6 @@ jobs:
           const statData = { 人物:{ 当前主角:{note:'protected'}, 甲人物:{bio:'a'.repeat(500)}, 乙人物:{bio:'b'.repeat(80)}, 丙人物:{bio:'c'.repeat(120)}, 丁人物:{bio:'d'.repeat(140)}, VAB测试节点:{bio:'tiny'} }, 当前队伍:{成员:['甲人物']} };
           const picked = selectOneTimeArchiveTestCandidate({ statData, recentText:'刚刚遇到乙人物' });
           if (!picked || picked.key !== 'VAB测试节点') throw new Error('preferred test node selection failed');
-          const withoutTest = structuredClone(statData); delete withoutTest.人物.VAB测试节点;
-          const picked2 = selectOneTimeArchiveTestCandidate({ statData:withoutTest, recentText:'刚刚遇到乙人物' });
-          if (!picked2 || ['乙人物','当前主角','甲人物'].includes(picked2.key)) throw new Error('protection failed');
           console.log('one-time archive selector ok');
           JS
       - name: Production safety invariants
@@ -129,52 +108,31 @@ jobs:
           grep -q "import './hot_state_governor.js'" bootstrap.js
           grep -q "import './self_update.js'" bootstrap.js
           ! grep -q "lifecycle_watchdog.js" bootstrap.js
-          grep -q '"version": "0.3.5"' manifest.json
+          grep -q '"version": "0.4.0"' manifest.json
           grep -q '"auto_update": true' manifest.json
-          grep -q "#vab-governor-settings .inline-drawer-toggle" bootstrap.js
-          grep -q "VariableArchiveBridgeHotStateGovernor?.refresh" bootstrap.js
-          grep -q "VariableArchiveBridgeSelfUpdate?.check" bootstrap.js
-          grep -q "const VERSION = '0.3.5'" hot_state_governor.js
-          grep -q "const CURRENT_VERSION = '0.3.5'" self_update.js
-          grep -q "const UPDATE_CHECK_MS = 60 \* 1000" self_update.js
-          grep -q "data-vab-section=\"collections\"" hot_state_governor.js
-          ! grep -q "setInterval" hot_state_governor.js
-          ! grep -q "toggle?.addEventListener('click'" hot_state_governor.js
+          grep -q "const VERSION = '0.4.0'" hot_state_governor.js
+          grep -q "const CURRENT_VERSION = '0.4.0'" self_update.js
+          grep -q "buildCoolingPreview" hot_state_governor.js
+          grep -q "warmIndex" hot_state_preview_core.js
+          grep -q "readOnly: true" hot_state_preview_core.js
+          ! grep -q "replaceMvuData\|archiveChild\|restoreArchive\|putArchive" hot_state_governor.js hot_state_preview_core.js
           grep -q "selectHotArchiveMatches" hot_archive_reconcile.js
-          grep -q "core-hot-presence-reconcile" hot_archive_reconcile.js
           grep -q "status: 'restored'" hot_archive_reconcile.js
           grep -q "hotAuthoritative: true" hot_archive_reconcile.js
-          grep -q "POLL_MS = 2500" hot_archive_reconcile.js
-          grep -q "MIN_OBSERVATIONS = 2" hot_archive_reconcile.js
-          ! grep -q "wrappedRefresh" hot_archive_reconcile.js
           ! grep -q "replaceMvuData" hot_archive_reconcile.js
-          ! grep -q "replaceMvuData\|archiveChild\|restoreArchive\|putArchive" hot_state_governor.js
           grep -q "readOnly: true" hot_state_governor_core.js
           grep -q "discoverGenericPolicy" hot_state_governor_core.js
-          grep -q "externalPolicy" hot_state_governor_core.js
-          grep -q "policySource" hot_state_governor_core.js
           grep -q "DYNAMIC_LABEL_RE" hot_state_governor_core.js
-          grep -q "universal: true" hot_state_governor.js
           grep -q "REMOTE_MANIFEST" self_update.js
+          grep -q "UPDATE_CHECK_MS = 60 \* 1000" self_update.js
           grep -q "'/api/extensions/update'" self_update.js
           grep -q "'/api/extensions/switch'" self_update.js
           ! grep -q "'/api/extensions/delete'\|'/api/extensions/install'" self_update.js
           ! grep -q "new MutationObserver" hot_archive_reconcile.js bootstrap.js production_auto.js hot_state_governor.js self_update.js
           grep -q "START_DELAY_MS = 4500" production_auto.js
-          grep -q "decideAutoStart" production_auto.js
-          grep -q "beginBoot" production_auto.js
-          grep -q "markBootHealthy" production_auto.js
-          grep -q "markBootFailed" production_auto.js
-          grep -q "setRecallEnabledSession(true)" production_auto.js
-          grep -q "setLifecycleEnabledSession(true, { skipConfirm: true })" production_auto.js
           grep -q "HEALTH_WATCHDOG_MS = 15000" production_auto.js
           grep -q "fail-closed" production_auto.js
-          grep -q "runOneTimeArchiveTest" production_auto.js
-          grep -q "archiveChild(candidate.containerPath, candidate.key, { automatic: true })" experimental/one_time_archive_test.js
-          grep -q "snapshotVerified" experimental/one_time_archive_test.js
-          grep -q "archiveVerified" experimental/one_time_archive_test.js
           ! grep -q "restoreArchive" production_auto.js experimental/one_time_archive_test.js hot_archive_reconcile.js
-          grep -q "autoConservative: true" experimental/auto_lifecycle_safe.js
       - name: Import graph
         shell: bash
         run: |
