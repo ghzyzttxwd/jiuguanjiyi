@@ -7,7 +7,7 @@ import {
   summarizeDeliveryDecision,
 } from './recall_delivery_core.js';
 
-const VERSION = '0.2.0-rc2';
+const VERSION = '0.2.0-rc3';
 const PROMPT_KEY = 'vab_cold_recall';
 const PROMPT_SIGNATURE = '<variable_cold_archive_recall>';
 const SETTINGS_KEY = 'vab.recall.safe.settings.v2';
@@ -64,7 +64,7 @@ function ctx() {
 }
 
 function getVab() {
-  return window.VariableArchiveBridge || null;
+  return window.VariableArchiveBridge || window.parent?.VariableArchiveBridge || null;
 }
 
 function state() {
@@ -313,7 +313,7 @@ async function setEnabled(value) {
     await clearInjection();
     statusText = '未启用 · 已清空本插件拥有的Prompt';
     updateUi();
-    return;
+    return enabled;
   }
 
   try {
@@ -324,17 +324,18 @@ async function setEnabled(value) {
       enabled = false;
       statusText = `无法开启：${conflictText}`;
       updateUi();
-      return;
+      return enabled;
     }
     enabled = true;
     cfg.enabled = false;
     saveSettings();
-    await refreshInjection({ reason: '手动开启协调器' });
+    await refreshInjection({ reason: '主控/手动开启协调器' });
   } catch (error) {
     enabled = false;
     statusText = `无法开启：${error?.message || error}`;
     updateUi();
   }
+  return enabled;
 }
 
 function bindEvent(name, handler) {
@@ -380,8 +381,14 @@ function unhookEvents() {
   bindings = [];
 }
 
+function uiHost() {
+  return document.querySelector('#vab-rc-host')
+    || document.querySelector('#vab-smart-host-safe')
+    || document.querySelector('#vab-settings #vab-root');
+}
+
 function ensureUi() {
-  const host = document.querySelector('#vab-smart-host-safe');
+  const host = uiHost();
   if (!host) return;
   if (host.querySelector('#vab-recall-safe')) {
     updateUi();
@@ -394,7 +401,7 @@ function ensureUi() {
   box.open = false;
   box.innerHTML = `
     <summary>🗃️ 冷档案自动召回候选 ${VERSION}</summary>
-    <div class="vab-note">RC2协调模式：冷档案继续留在 IndexedDB，只读召回相关片段。会自动检测现有 {{varArchiveContext}}、记忆增强镜像和同名Prompt Key；能让路就自动让路，不能安全判定就阻止注入。默认仍关闭实际注入，重启后也不会自动开启。</div>
+    <div class="vab-note">RC3：支持统一主控直接调用，不再依赖模拟点击UI。冷档案继续留在 IndexedDB，只按需召回相关片段；会自动检测现有 {{varArchiveContext}}、记忆增强镜像和同名Prompt Key。</div>
     <label class="checkbox_label"><input type="checkbox" data-vab-recall-enabled> 实际Prompt自动召回协调器（实验）</label>
     <label class="checkbox_label"><input type="checkbox" data-vab-recall-pinned> 无关键词时允许置顶档案作为背景召回</label>
     <label class="checkbox_label"><input type="checkbox" data-vab-recall-skip-mirror> 检测到记忆增强时跳过已镜像档案</label>
@@ -501,6 +508,10 @@ export async function unmountRecallSafe() {
   mounted = false;
 }
 
+export async function setRecallEnabledSession(value) {
+  return await setEnabled(!!value);
+}
+
 export const RecallSafeDiagnostics = {
   VERSION,
   PROMPT_KEY,
@@ -509,4 +520,5 @@ export const RecallSafeDiagnostics = {
   getDecision: () => clone(lastDecision),
   preview: () => buildCurrentRecall(),
   isEnabled: () => enabled,
+  setEnabled: setRecallEnabledSession,
 };
