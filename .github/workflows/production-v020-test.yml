@@ -10,6 +10,8 @@ on:
       - 'hot_archive_reconcile_core.js'
       - 'hot_state_governor.js'
       - 'hot_state_governor_core.js'
+      - 'self_update.js'
+      - 'self_update_core.js'
       - 'manifest.json'
       - 'experimental/**'
       - '.github/workflows/production-v020-test.yml'
@@ -33,6 +35,8 @@ jobs:
           node --check hot_archive_reconcile_core.js
           node --check hot_state_governor.js
           node --check hot_state_governor_core.js
+          node --check self_update.js
+          node --check self_update_core.js
           node --check production_auto.js
           node --check experimental/boot_guard_core.js
           node --check experimental/recall_safe.js
@@ -117,8 +121,9 @@ jobs:
           grep -q "import './hot_archive_reconcile.js'" bootstrap.js
           grep -q "import './production_auto.js'" bootstrap.js
           grep -q "import './hot_state_governor.js'" bootstrap.js
+          grep -q "import './self_update.js'" bootstrap.js
           ! grep -q "lifecycle_watchdog.js" bootstrap.js
-          grep -q '"version": "0.3.2"' manifest.json
+          grep -q '"version": "0.3.3"' manifest.json
           grep -q '"auto_update": true' manifest.json
           grep -q "#vab-governor-settings .inline-drawer-toggle" bootstrap.js
           grep -q "VariableArchiveBridgeHotStateGovernor?.refresh" bootstrap.js
@@ -138,7 +143,11 @@ jobs:
           grep -q "externalPolicy" hot_state_governor_core.js
           grep -q "policySource" hot_state_governor_core.js
           grep -q "universal: true" hot_state_governor.js
-          ! grep -q "new MutationObserver" hot_archive_reconcile.js bootstrap.js production_auto.js hot_state_governor.js
+          grep -q "REMOTE_MANIFEST" self_update.js
+          grep -q "'/api/extensions/update'" self_update.js
+          grep -q "'/api/extensions/switch'" self_update.js
+          ! grep -q "'/api/extensions/delete'\|'/api/extensions/install'" self_update.js
+          ! grep -q "new MutationObserver" hot_archive_reconcile.js bootstrap.js production_auto.js hot_state_governor.js self_update.js
           grep -q "START_DELAY_MS = 4500" production_auto.js
           grep -q "decideAutoStart" production_auto.js
           grep -q "beginBoot" production_auto.js
