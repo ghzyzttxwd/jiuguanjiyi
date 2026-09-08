@@ -1,16 +1,18 @@
-// Variable Archive Bridge v0.3.4 Hot State Governor — universal analysis-only phase.
+// Variable Archive Bridge v0.3.5 Hot State Governor — universal analysis-only phase.
 // Reads current MVU and reports growth pressure. It never writes MVU, archives, or prompts.
 // Card-specific policies are optional adapters; cards without one use conservative generic discovery.
 
 import { analyzeHotState } from './hot_state_governor_core.js';
 
-const VERSION = '0.3.4';
+const VERSION = '0.3.5';
 const PANEL_ID = 'vab-governor-settings';
-const REFRESH_MS = 5000;
 let lastReport = null;
 let lastError = '';
-let timer = null;
 let running = false;
+const sectionState = {
+  collectionsOpen: false,
+  historiesOpen: false,
+};
 
 function vab() {
   try {
@@ -90,10 +92,29 @@ function ensurePanel() {
   return true;
 }
 
+function rememberSectionState(root) {
+  const collections = root?.querySelector('[data-vab-section="collections"]');
+  const histories = root?.querySelector('[data-vab-section="histories"]');
+  if (collections) sectionState.collectionsOpen = !!collections.open;
+  if (histories) sectionState.historiesOpen = !!histories.open;
+}
+
+function bindSectionState(root) {
+  const collections = root?.querySelector('[data-vab-section="collections"]');
+  const histories = root?.querySelector('[data-vab-section="histories"]');
+  collections?.addEventListener('toggle', () => {
+    sectionState.collectionsOpen = !!collections.open;
+  });
+  histories?.addEventListener('toggle', () => {
+    sectionState.historiesOpen = !!histories.open;
+  });
+}
+
 function render() {
   if (!ensurePanel()) return;
   const root = document.querySelector(`#${PANEL_ID} .vab-governor-root`);
   if (!root) return;
+  rememberSectionState(root);
   if (lastError) {
     root.innerHTML = `<div class="vab-note">⚠ ${esc(lastError)}</div>`;
     return;
@@ -105,6 +126,9 @@ function render() {
 
   const { summary, collections, histories, profileLabel, policySource } = lastReport;
   const problemRows = collections.filter(x => x.level !== 'ok');
+  if (!sectionState.collectionsOpen && problemRows.length) sectionState.collectionsOpen = true;
+  if (!sectionState.historiesOpen && histories.length) sectionState.historiesOpen = true;
+
   const collectionHtml = collections.map(row => `
     <div class="vab-governor-row ${row.level}">
       <div><b>${esc(row.label)}</b><small>${esc(row.path)}</small></div>
@@ -129,16 +153,17 @@ function render() {
     <div class="vab-governor-summary">
       stat_data：${fmtBytes(summary.totalStatBytes)} · 超硬上限 ${summary.hard} 组 · 超软上限 ${summary.warn} 组 · 估算可降温/历史化 ${summary.candidateCount} 项
     </div>
-    <details class="vab-section" ${problemRows.length ? 'open' : ''}>
+    <details class="vab-section" data-vab-section="collections" ${sectionState.collectionsOpen ? 'open' : ''}>
       <summary>集合热区预算（${collections.length}）</summary>
       ${collectionHtml || '<div class="vab-note">当前没有命中已知策略；通用自动发现也未发现明显动态集合。</div>'}
     </details>
-    <details class="vab-section" ${histories.length ? 'open' : ''}>
+    <details class="vab-section" data-vab-section="histories" ${sectionState.historiesOpen ? 'open' : ''}>
       <summary>活跃对象内部历史（${histories.length}）</summary>
       ${historyHtml}
     </details>
   `;
   root.querySelector('.vab-governor-refresh')?.addEventListener('click', () => refreshReport());
+  bindSectionState(root);
 }
 
 export async function refreshReport() {
@@ -167,11 +192,9 @@ export async function refreshReport() {
 function start() {
   ensurePanel();
   setTimeout(() => refreshReport(), 1200);
-  if (!timer) timer = setInterval(() => {
-    if (document.hidden) return;
-    const content = document.querySelector(`#${PANEL_ID} .vab-governor-content`);
-    if (content && content.style.display !== 'none') refreshReport();
-  }, REFRESH_MS);
+  // Deliberately no repeating UI refresh. The governor refreshes when its drawer is opened
+  // (bootstrap.js) or when the user taps "刷新分析". This avoids mobile details auto-collapse
+  // and unnecessary DOM churn while the panel is only a diagnostics surface.
 }
 
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, { once: true });
