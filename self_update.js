@@ -1,15 +1,15 @@
-// Variable Archive Bridge v0.3.4 self-update surface.
-// Mirrors Tavern Helper's user experience: the extension checks its own remote manifest,
+// Variable Archive Bridge v0.3.5 self-update surface.
+// Mirrors Tavern Helper's user experience: automatically checks its own remote manifest,
 // shows a Chinese "更新" button inside its own settings, and updates without requiring
 // the user to open SillyTavern's extension manager.
 
 import { hasNewerVersion, chooseUpdatePath } from './self_update_core.js';
 
-const CURRENT_VERSION = '0.3.4';
+const CURRENT_VERSION = '0.3.5';
 const EXTENSION_ID = 'jiuguanjiyi';
 const REPO_URL = 'https://github.com/ghzyzttxwd/jiuguanjiyi';
 const REMOTE_MANIFEST = 'https://raw.githubusercontent.com/ghzyzttxwd/jiuguanjiyi/main/manifest.json';
-const UPDATE_CHECK_MS = 10 * 60 * 1000;
+const UPDATE_CHECK_MS = 60 * 1000;
 const WIDGET_ID = 'vab-self-update';
 
 let latestVersion = CURRENT_VERSION;
@@ -18,6 +18,7 @@ let updating = false;
 let lastError = '';
 let lastCheckAt = 0;
 let timer = null;
+let queuedCheck = null;
 
 function toast(kind, message) {
   try {
@@ -87,10 +88,10 @@ function render() {
   }
 
   check.disabled = checking;
-  check.textContent = checking ? '检查中…' : '检查更新';
+  check.textContent = checking ? '检查中…' : '重新检查';
 
   if (lastError) {
-    status.textContent = `当前 v${CURRENT_VERSION} · ${lastError}`;
+    status.textContent = `当前 v${CURRENT_VERSION} · 自动检查失败：${lastError}`;
     btn.style.display = 'none';
     return;
   }
@@ -101,7 +102,7 @@ function render() {
     btn.disabled = false;
     btn.style.display = '';
   } else {
-    status.textContent = `当前 v${CURRENT_VERSION} · 已是最新版本`;
+    status.textContent = `当前 v${CURRENT_VERSION} · 已是最新版本 · 自动检查开启`;
     btn.style.display = 'none';
   }
 }
@@ -118,14 +119,14 @@ function ensureWidget() {
     <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
       <div>
         <b>ℹ️ 扩展信息</b>
-        <div class="vab-self-update-status" style="opacity:.8;margin-top:4px;">当前 v${CURRENT_VERSION} · 正在检查更新…</div>
+        <div class="vab-self-update-status" style="opacity:.8;margin-top:4px;">当前 v${CURRENT_VERSION} · 正在自动检查更新…</div>
       </div>
       <div style="display:flex;gap:6px;flex-wrap:wrap;">
-        <button class="menu_button vab-self-update-check">检查更新</button>
+        <button class="menu_button vab-self-update-check">重新检查</button>
         <button class="menu_button vab-self-update-action" style="display:none;">更新</button>
       </div>
     </div>
-    <div style="opacity:.65;font-size:.9em;margin-top:6px;">以后发现新版本会直接在这里出现“更新”，不需要再进“管理扩展”。</div>
+    <div style="opacity:.65;font-size:.9em;margin-top:6px;">自动检查已开启；发现新版本会直接显示“更新”。“重新检查”仅作备用。</div>
   `;
   content.prepend(wrap);
 
@@ -160,6 +161,14 @@ async function checkForUpdate({ force = false } = {}) {
     checking = false;
     render();
   }
+}
+
+function queueAutoCheck({ force = false } = {}) {
+  if (queuedCheck) clearTimeout(queuedCheck);
+  queuedCheck = setTimeout(() => {
+    queuedCheck = null;
+    checkForUpdate({ force }).catch(() => {});
+  }, 250);
 }
 
 async function postExtension(path, body) {
@@ -240,12 +249,21 @@ async function performUpdate() {
   }
 }
 
+function installLifecycleChecks() {
+  window.addEventListener('focus', () => queueAutoCheck({ force: true }));
+  window.addEventListener('online', () => queueAutoCheck({ force: true }));
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) queueAutoCheck({ force: true });
+  });
+}
+
 function start() {
   let attempts = 0;
   const attach = () => {
     attempts += 1;
     if (ensureWidget()) {
       checkForUpdate({ force: true });
+      installLifecycleChecks();
       if (!timer) timer = setInterval(() => checkForUpdate(), UPDATE_CHECK_MS);
       return;
     }
@@ -261,5 +279,5 @@ window.VariableArchiveBridgeSelfUpdate = {
   VERSION: CURRENT_VERSION,
   check: () => checkForUpdate({ force: true }),
   update: performUpdate,
-  getStatus: () => ({ currentVersion: CURRENT_VERSION, latestVersion, checking, updating, lastError }),
+  getStatus: () => ({ currentVersion: CURRENT_VERSION, latestVersion, checking, updating, lastError, lastCheckAt }),
 };
