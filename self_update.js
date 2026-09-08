@@ -1,11 +1,11 @@
-// Variable Archive Bridge v0.3.3 self-update surface.
+// Variable Archive Bridge v0.3.4 self-update surface.
 // Mirrors Tavern Helper's user experience: the extension checks its own remote manifest,
 // shows a Chinese "更新" button inside its own settings, and updates without requiring
 // the user to open SillyTavern's extension manager.
 
 import { hasNewerVersion, chooseUpdatePath } from './self_update_core.js';
 
-const CURRENT_VERSION = '0.3.3';
+const CURRENT_VERSION = '0.3.4';
 const EXTENSION_ID = 'jiuguanjiyi';
 const REPO_URL = 'https://github.com/ghzyzttxwd/jiuguanjiyi';
 const REMOTE_MANIFEST = 'https://raw.githubusercontent.com/ghzyzttxwd/jiuguanjiyi/main/manifest.json';
@@ -172,10 +172,6 @@ async function postExtension(path, body) {
 }
 
 async function forceAndroidRefresh(global) {
-  // SillyAndroid 1.1.6 has a useful no-git branch-switch fallback: switching to the
-  // current branch re-downloads to a temp directory first, then atomically replaces
-  // the extension. This bypasses its flaky GitHub-API commit check without deleting
-  // the live extension first.
   const response = await postExtension('/api/extensions/switch', {
     extensionName: EXTENSION_ID,
     branch: 'main',
