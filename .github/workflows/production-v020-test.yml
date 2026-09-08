@@ -210,7 +210,7 @@ jobs:
           if (d.allow) throw new Error('recent candidate must not auto cool');
           d = evaluateAutoCooling({ enabled:true, generationActive:false, messageCount:50, armedMessageCount:40, plan:{...base,candidate:{...base.candidate,reasons:['最近对话直接提及']}} });
           if (d.allow) throw new Error('mentioned candidate must not auto cool');
-          d = evaluateAutoCooling({ enabled:true, generationActive:true, messageCount:50, armedMessageCount:40, plan:base });
+          d = evaluateAutoCooling({ enabled:true, generationActive:true,messageCount:50,armedMessageCount:40,plan:base });
           if (d.allow) throw new Error('generation must block auto cooling');
           console.log('automatic scheduler policy ok');
           JS
@@ -237,7 +237,9 @@ jobs:
           grep -q "historyExecutor" auto_cooling_scheduler.js
           grep -q "saveSnapshot?.('before-auto-history-compact')" history_compaction_executor.js
           grep -q "status: 'pending'" history_compaction_executor.js
-          grep -q "rollbackTargetArray" history_compaction_executor.js
+          ! grep -q "rollbackTargetArray" history_compaction_executor.js
+          grep -q "concurrentChangeDetected: true" history_compaction_executor.js
+          grep -q "未回写旧数组" history_compaction_executor.js
           grep -q "recordType: 'history-segment'" history_compaction_executor.js
           ! grep -q "\.archiveChild" auto_cooling_scheduler.js history_compaction_executor.js
           ! grep -q "replaceMvuData" auto_cooling_scheduler.js auto_cooling_scheduler_core.js history_compaction_core.js unified_runtime.js
